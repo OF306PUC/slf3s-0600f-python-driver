@@ -1,0 +1,309 @@
+# -*- coding: utf-8 -*-
+# (c) Copyright 2019 Sensirion AG, Switzerland
+
+from serial_frame_builder import ShdlcSerialMosiFrameBuilder, \
+    ShdlcSerialMisoFrameBuilder
+from threading import RLock
+import serial 
+import time 
+
+import logging
+log = logging.getLogger(__name__)
+
+
+class ShdlcPort(object): 
+    """
+    Common interface for all communication ports for transceiving SHDLC frames.
+
+    Concrete implementations may use the serial port or another interface for
+    transceiving SHDLC frames. All methods must be implemented thread-safe,
+    i.e. allowing them to be called from multiple threads at the same time 
+    (usage of RLock from threading lib.).
+    """
+
+    @property 
+    def bitrate(self): 
+        """
+        Get the current bitrate in bit/s
+        
+        :type: int
+        """
+        raise NotImplementedError()
+    
+    @bitrate.setter 
+    def bitrate(self, bitrate): 
+        """
+        Set the bitrate in bit/s
+        
+        :param int bitrate: Bitrate in bit/s
+        """
+        raise NotImplementedError()
+    
+    @property
+    def lock(self): 
+        """
+        Get the lock object for thread-safe access to the port, i.e. to get
+        exclusive access across mutiple method calls.
+
+        :return: The lock object.
+        :rtype: threading.RLock
+        """
+        raise NotImplementedError()
+    
+    @property 
+    def is_open(self): 
+        """
+        Check whether the port is open.
+
+        :return: True if the port is open, False otherwise.
+        :rtype: bool
+        """
+        raise NotImplementedError()
+    
+    def open(self):
+        """
+        Open the port. Only needs to be called if the port is not already opened. 
+        Does nothing if the port is already opened.
+        """
+        raise NotImplementedError()
+    
+    def close(self):
+        """
+        Close the port to release the underlying resources. Only needs to be called if the port is opened. 
+        Does nothing if the port is already closed.
+        """
+        raise NotImplementedError()
+    
+    def transceive(self, slave_address, command, data, response_timeout): 
+        """
+        Transceive an SHDLC frame: Send a frame to port and wait for the response frame.
+
+        .. note:: The specified response timeout defines the maximum time the
+                  device needs until it starts to send the response after
+                  receiving the last byte from the master request. The time
+                  needed for the transmission itself and other possible
+                  overhead or delays depends on hardware, drivers, bitrate etc.
+                  and must be taken into account in the implementation of this
+                  method.
+
+        :param int slave_address: The slave address.
+        :param int command: The SHDLC command ID.
+        :param list data: The data bytes to send (Payload).
+        :param float response_timeout: Response timeout in seconds (maximum
+                                       time until the first byte is received).
+        :return: Received address, command_id, state, and payload.
+        :rtype: byte, byte, byte, bytes.
+        """
+        raise NotImplementedError()
+    
+
+class ShdlcSerialPort(ShdlcPort):
+    """
+    SHDLC transceiver for the serial port (e.g. UART/RS485).
+
+    This class implements the ShdlcPort interface for the serial port.
+
+    .. note:: This class can be used in a "with"-statement, and it's
+              recommended to do so as it automatically closes the port after
+              using it.
+    """
+
+    def __init__(self, port, baudrate, additional_response_time=0.1, 
+                 do_open=True): 
+        """
+        Creates and optionally open a serial port.
+
+        :param string port: The serial port name (e.g. COM1, /dev/ttyUSB0).
+        :param int baudrate: The serial port baudrate (bit/s).
+        :param float additional_response_time: Additional response time in
+                                               seconds added to the response
+                                               timeout for waiting for the full
+                                               response frame.
+        :param bool do_open: Whether to open the port immediately.
+        """
+        super(ShdlcSerialPort, self).__init__()
+        self._additional_response_time = float(additional_response_time)
+        self._lock = RLock()
+        self._serial = serial.Serial(
+            port=port,
+            baudrate=baudrate,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=0.01,
+            xonxoff=False)
+        self._serial.port = port
+        if do_open:
+            self.open()
+
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    @property 
+    def bitrate(self): 
+        """
+        Get the current bitrate in bit/s
+        
+        :type: int
+        """
+        with self._lock:
+            return self._serial.baudrate
+        
+    @bitrate.setter 
+    def bitrate(self, bitrate): 
+        with self._lock: 
+            self._serial.baudrate = bitrate
+
+    @property
+    def additional_response_time(self): 
+        """
+        The additional response time (in Seconds) used when receiving frames.
+
+        Since the timeout measurement of serial communication is typically
+        very inaccurate (e.g. USB-UART converter drivers often buffer I/O
+        data for 16ms), this class adds some extra time to the specified
+        response timeout to avoid timeout errors even if the device responded
+        within the given timeout. If needed, this extra time can be changed
+        either with this property, or with the parameter
+        ``additional_response_time`` of
+        :py:meth:`~sensirion_shdlc_driver.port.ShdlcSerialPort.__init__`.
+
+        :type: float
+        """
+        with self._lock:
+            return self._additional_response_time
+        
+    @additional_response_time.setter
+    def additional_response_time(self, additional_response_time): 
+        with self._lock:
+            self._additional_response_time = float(additional_response_time)
+
+    @property
+    def lock(self): 
+        """
+        Get the lock object for thread-safe access to the port, i.e. to get
+        exclusive access across mutiple method calls.
+
+        :return: The lock object.
+        :rtype: threading.RLock
+        """
+        return self._lock
+    
+    @property
+    def is_open(self): 
+        """
+        Check whether the port is open.
+
+        :return: True if the port is open, False otherwise.
+        :rtype: bool
+        """
+        with self._lock:
+            return self._serial.is_open
+        
+    def open(self):
+        """
+        Open the port. Only needs to be called if the port is not already opened. 
+        Does nothing if the port is already opened.
+        """
+        if self._serial.is_open is False:
+            self._serial.open()
+
+    def close(self):
+        """
+        Close the port to release the underlying resources. Only needs to be called if the port is opened. 
+        Does nothing if the port is already closed.
+        """
+        if self._serial.is_open is True:
+            self._serial.close()
+
+    def transceive(self, slave_address, command_id, data, response_timeout):
+        """
+        Send an SHDLC frame to port and retuirn the received the response frame. 
+
+        :param byte slave_address: Slave address.
+        :param byte command_id: SHDLC command ID.
+        :param bytes-like data: Payload.
+        :param float response_timeout: Response timeout in seconds (maximum
+                                       time until the first byte is received).
+        :return: Received address, command_id, state, and payload.
+        :rtype: byte, byte, byte, bytes
+        """
+        with self._lock: 
+            self._serial.reset_input_buffer()
+            self._send_frame(slave_address, command_id, data)
+            self._serial.flush()
+            return self._receive_frame(response_timeout)
+        
+    def _send_frame(self, slave_address, command_id, data): 
+        """
+        Send a frame to the serial port.
+
+        :param byte slave_address: Slave address.
+        :param byte command_id: SHDLC command ID.
+        :param bytes-like data: Payload.
+        """
+        # lives in the dynamical memory during the function call (heap stack)
+        builder = ShdlcSerialMosiFrameBuilder(slave_address, command_id, data)
+        tx_data = builder.to_bytes()
+        log.debug("ShdlcSerialPort send raw: [{}]".format(
+                  ", ".join(["0x%.2X" % i for i in bytearray(tx_data)])))
+        self._serial.write(tx_data)
+
+    def _receive_frame(self, response_timeout):
+        """
+        Wait for the response frame and return it.
+
+        :param float response_timeout: Response timeout in seconds (maximum
+                                       time until the first byte is received).
+        :return: Received address, command_id, state, and payload.
+        :rtype: byte, byte, byte, bytes
+        """
+        start_time = time.time()
+        response_timeout += self._additional_response_time # add extra time to avoid timeout errors
+        total_timeout = response_timeout + self._calculate_maximum_frame_time()
+        builder = ShdlcSerialMisoFrameBuilder() # lives in the dynamical memory during the function call (heap stack)
+
+        while True: 
+            # Fetch all received bytes at once (to get maximum performance) or 
+            # wait for at least one bye (with timeout) if the buffer is empty. 
+            new_data = self._serial.read(max(self._serial.in_waiting, 1))
+
+            # Process received data and return if the frame is complete
+            if builder.add_data(new_data): 
+                log.debug("ShdlcSerialPort received raw: [{}]".format(
+                    ", ".join(["0x%.2X" % i for i in bytearray(new_data)])))
+                return builder.interpret_data()
+            
+            # frame not complete yet, check for timeout
+            elapsed_time = time.time() - start_time
+            timeout = total_timeout if builder.start_received else response_timeout
+            if elapsed_time > timeout: 
+                log.warning("ShdlcSerialPort timed out while waiting for "
+                            "response after {:.0f} ms.".format(
+                                elapsed_time * 1000.0))
+                log.debug("ShdlcSerialPort received raw until timeout: [{}]"
+                          .format(", ".join(["0x%.2X" % i
+                                             for i in builder.data])))
+                raise RuntimeError("Timeout while waiting for response.")
+            
+    def _calculate_maximum_frame_time(self):
+        """
+        Calculate the time required for receiving the longest possible frame,
+        respecting the used bitrate and with some extra time for inter-byte
+        spaces etc.
+
+        :return: Maximum frame time in Seconds
+        :rtype: float
+        """
+        # Calculate theoretical transmission time of longest possible frame:
+        #   600 bytes * (start bit + 8 data bits + stop bit) / bitrate
+        max_frame_time = (600.0 * 10.0) / self.bitrate
+        # Add 200ms extra, e.g. for inter-byte spaces. From "Protocol Timings" in 
+        # Sensirion SHDLC Communication Interface Reference Manual.
+        return max_frame_time + 0.2
+
+            
+

@@ -1,0 +1,15 @@
+(1) End of Inufusion < 96 horas 
+
+(2) Flujo remanente en: 
+    * Sensor 
+    * Tubo Infusor Bomba 
+    * Puertos Luer-Lock 
+    * Catéter 
+    ==> Se debe a que el extremo de salida del catéter quedo levemente sumergido en el volumen de suero dispensado en el vaso precipitado 
+
+(3) Volumen total de infusión: 
+    * Vaso 1: ~280 mL
+    * Vaso 2: ~280 mL
+    * Vaso 3: ~285 mL
+    ==> ~% del volumen total (300 mL) dentro del globo elastomérico
+

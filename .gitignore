@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime secrets / experiment config (copy .env.template → .env)
+.env
+
+# Generated at runtime on the acquisition host (Docker volume mounts)
+data/
+logs/
+
+# Analysis outputs
+results/
+experimental_analysis/results/
+
+# Experimental data — kept locally for analysis, never published to this repo
+experimental_analysis/Temp/*
+!experimental_analysis/Temp/.gitkeep
+
+# Keep lab photos out of the public repo — experiment_notes/ holds text notes only
+experiment_notes/**/*.jpg
+experiment_notes/**/*.jpeg
+experiment_notes/**/*.png
+experiment_notes/**/*.heic
+
+# OS cruft
+.DS_Store

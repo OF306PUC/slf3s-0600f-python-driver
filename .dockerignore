@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.pyo
+data/
+logs/
+.env
+*.bin
+*.csv
+.env/
+run.sh
