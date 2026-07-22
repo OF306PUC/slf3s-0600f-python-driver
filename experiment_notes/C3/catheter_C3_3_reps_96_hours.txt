@@ -11,5 +11,5 @@
     * Vaso 1: ~255 mL
     * Vaso 2: ~250 mL
     * Vaso 3: ~255 mL
-    ==> ~% del volumen total (300 mL) dentro del globo elastomérico
+    ==> ~83.3% del volumen total (300 mL) dentro del globo elastomérico
 
