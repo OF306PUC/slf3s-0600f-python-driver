@@ -10,6 +10,12 @@ __pycache__/
 data/
 logs/
 
+# Same outputs when main.py runs directly from raspberry/ instead of in Docker:
+# core.py writes to Temp/ and Logs/ relative to the cwd. Capitalised, so the
+# lowercase patterns above do not cover them on a case-sensitive filesystem.
+raspberry/Temp/
+raspberry/Logs/
+
 # Analysis outputs
 results/
 experimental_analysis/results/
@@ -23,6 +29,36 @@ experiment_notes/**/*.jpg
 experiment_notes/**/*.jpeg
 experiment_notes/**/*.png
 experiment_notes/**/*.heic
+
+# ── AI tooling and its documentation: LOCAL ONLY, never committed ─────────────
+# This repo publishes the driver and the analysis, not the assistant scaffolding
+# that helped write them.
+#
+#   .claude/         the harness: agent definitions, hooks, skills, settings
+#   .studio/         everything the studio generates: the living documentation
+#                    (session log, project overview, roadmap, backlog, memory),
+#                    session state, and the CLAUDE.md/AGENTS.md/GEMINI.md contract
+#   CLAUDE.md        the root import stub that points at .studio/CLAUDE.md
+#
+# Consequence, deliberate: none of this is versioned and none of it travels with a
+# clone. The living documentation has no git history, so `.studio/` existing on disk
+# IS its only copy — back it up separately if it matters.
+#
+# The reproducibility-critical part is unaffected: every declared methodology
+# parameter lives in experimental_analysis/config.py, which IS committed, and each
+# run's stats.json embeds it.
+.claude/
+.studio/
+/CLAUDE.md
+
+# Experimental methodology notes — local only, by request.
+# Mirrored (with rationale) in experimental_analysis/config.py, which is committed.
+methodology.txt
+
+# Credentials / local overrides (CLAUDE.md § Data Protection §5)
+credentials.json
+token.json
+settings.local.json
 
 # OS cruft
 .DS_Store
