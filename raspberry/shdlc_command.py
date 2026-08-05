@@ -208,10 +208,15 @@ class ShdlcStartContinuousMeasurement(ShdlcStartContinuousMeasurementBase):
                 will not have access to other commands (EEPROM) until the device is reset.
     """
 
+    # Reference table of the intervals the sensor accepts, kept for documentation.
+    # Do NOT pass these directly: callers build the payload with
+    # core.measurement_interval_bytes(core.SAMPLING_INTERVAL) so the sensor readout
+    # period cannot drift away from the polling period (f_ro = f_s). Picking a
+    # constant here at a call site is exactly how the two would silently diverge.
     _MEASUREMENT_INTERVAL_60000_MS = [0xEA, 0x60]  # 60 s
-    _MEASUREMENT_INTERVAL_10000_MS = [0x27, 0x10]  # 10 s
+    _MEASUREMENT_INTERVAL_10000_MS = [0x27, 0x10]  # 10 s  ← project standard
     _MEASUREMENT_INTERVAL_1000_MS  = [0x03, 0xE8]  # 1 s
-    _MEASUREMENT_INTERVAL_100_MS   = [0x00, 0x64]  # 100 ms 
+    _MEASUREMENT_INTERVAL_100_MS   = [0x00, 0x64]  # 100 ms
     _MEASUREMENT_INTERVAL_50_MS    = [0x00, 0x32]  # 50 ms
     _MEASUREMENT_INTERVAL_20_MS    = [0x00, 0x14]  # 20 ms
 

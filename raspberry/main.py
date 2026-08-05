@@ -66,11 +66,13 @@ def parse_args():
     parser.add_argument("--hours-to-log", type=float, default=core.HOURS_TO_LOG,
         help=f"Logging duration in hours (default: {core.HOURS_TO_LOG})")
     parser.add_argument("--sampling-ms", type=int, default=core.SAMPLING_INTERVAL,
-        help=f"Sampling interval in ms (default: {core.SAMPLING_INTERVAL})")
+        help=f"Sampling interval in ms. Locked to the sensor readout period "
+             f"(f_ro = f_s); only {core.SAMPLING_INTERVAL} is accepted "
+             f"(default: {core.SAMPLING_INTERVAL})")
 
     # Experiment metadata
     parser.add_argument("--configuration", type=str, default="UNKNOWN",
-        help="Catheter config label: C0, C1a, C1b, C2, C3, C4")
+        help="Catheter config label, one of: " + ", ".join(core.CONFIG_NAMES))
     parser.add_argument("--experiment-rep", type=str, default="UNKNOWN",
         help="Unique run identifier for catheter config: rep_1, rep_2, rep_3")
     parser.add_argument("--pump-lot", type=str, default="UNKNOWN",
@@ -78,7 +80,7 @@ def parse_args():
     parser.add_argument("--fluid", type=str, default="UNKNOWN",
         help="Fluid used in the experiment, e.g. NaCl_240mL_bupiv_60mL")
     parser.add_argument("--raspberry-id", type=str, default="UNKNOWN",
-        help="Raspberry Pi identifier: 2, 9, or 10")
+        help="Raspberry Pi identifier (fleet in use: 1, 2, 3, 8, 9, 10)")
 
     # Execution modes
     parser.add_argument("--dry-run", action="store_true",
@@ -103,6 +105,30 @@ def main():
     if args.sampling_ms <= 0:
         parser.error("--sampling-ms must be a positive integer.")
 
+    # f_ro = f_s is an invariant, not a preference: the CSV metadata records
+    # `f_ro_hz` derived from the polling interval, so a polling rate that differs
+    # from the sensor's readout rate makes that field a lie in a file nobody will
+    # re-derive. Fail loudly at launch instead of producing days of mislabelled data.
+    if args.sampling_ms != core.SAMPLING_INTERVAL:
+        parser.error(
+            f"--sampling-ms must be {core.SAMPLING_INTERVAL} ms: the sensor readout "
+            f"period and the polling period are locked together (f_ro = f_s), and "
+            f"got {args.sampling_ms} ms. To change the project's acquisition rate, "
+            f"edit core.SAMPLING_INTERVAL (allowed: "
+            f"{', '.join(str(v) for v in core.SHDLC_SUPPORTED_INTERVALS_MS)} ms)."
+        )
+
+    # An ad-hoc configuration label is how the first campaign ended up with runs
+    # recorded as `C1` but filed as `C1a` — invisible in a directory listing and
+    # wrong for anything grouping by the in-file metadata. Reject it at the source.
+    if args.configuration not in core.CONFIG_NAMES:
+        parser.error(
+            f"--configuration must be one of the {len(core.CONFIG_NAMES)} study "
+            f"conditions ({', '.join(core.CONFIG_NAMES)}), got "
+            f"{args.configuration!r}. Add a new condition to core.CONFIG_NAMES "
+            f"before running it."
+        )
+
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
@@ -116,6 +142,9 @@ def main():
         "pump_lot":           args.pump_lot,
         "fluid":              args.fluid,
         "raspberry_id":       args.raspberry_id,
+        # Truthful by construction: the validation above guarantees the polling
+        # period equals the sensor's readout period, so f_ro derived from it is
+        # the rate the sensor actually produced.
         "f_ro_hz":            round(1000.0 / sampling_interval_ms, 4),
         "sampling_ms":        sampling_interval_ms,
     }

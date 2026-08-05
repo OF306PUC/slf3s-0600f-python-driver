@@ -59,13 +59,19 @@ def _run_communication(
             log.warning("Stop command returned error state: %s", error)
         time.sleep(1)
 
-        # I2C Transceive command to start continuous measurement
+        # I2C Transceive command to start continuous measurement.
+        # The sensor's readout period is derived from the SAME sampling_interval
+        # used to poll it below, so f_ro = f_s holds by construction rather than by
+        # two literals agreeing (see core.SAMPLING_INTERVAL).
         i2c_transceive_start_cmd = ShdlcStartContinuousMeasurement(
-            measurement_interval=ShdlcStartContinuousMeasurement._MEASUREMENT_INTERVAL_10000_MS,
+            measurement_interval=core.measurement_interval_bytes(sampling_interval),
             i2c_medium_command=ShdlcStartContinuousMeasurement._I2C_MEAS_CMD_MEDIUM_WATER
         )
         _, error  = interface.execute(slave_address, i2c_transceive_start_cmd)
-        log.info("(2) Starting continuous measurement")
+        log.info(
+            "(2) Starting continuous measurement (f_ro = f_s = %d ms)",
+            sampling_interval,
+        )
         if error:
             log.warning("Start command returned error state: %s", error)
         time.sleep(1)

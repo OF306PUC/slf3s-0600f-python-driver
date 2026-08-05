@@ -43,5 +43,7 @@ docker run --rm -d \
         --pump-lot         "${PUMP_LOT:-UNKNOWN}" \
         --fluid            "${FLUID:-UNKNOWN}" \
         --hours-to-log     "${HOURS:-48}" \
-        --sampling-ms      "${SAMPLING_MS:-1000}" \
+        `# f_ro = f_s = 10 s. main.py rejects any other value; the single source` \
+        `# of truth is core.SAMPLING_INTERVAL.` \
+        --sampling-ms      "${SAMPLING_MS:-10000}" \
         --raspberry-id     "${RASPBERRY_PI_ID:-UNKNOWN}"
