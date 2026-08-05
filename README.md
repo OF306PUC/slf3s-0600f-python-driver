@@ -25,7 +25,7 @@ in line, and on **pump reuse**. This application characterizes that behavior:
 | Layer | Path | Scope |
 |-------|------|-------|
 | **General driver** | [`raspberry/`](raspberry/) | A **reusable** long-running data logger for the Sensirion **SLF3S-0600F** flow sensor via SHDLC over RS485/USB. It is *not* specific to infusion pumps — use it for any Pi-based liquid-flow logging: dual-threaded acquisition, self-describing CSV + recoverable binary logs, ring-buffer error context, clean SIGTERM shutdown. |
-| **The application** | [`experimental_analysis/`](experimental_analysis/), `.env` experiment metadata, [`experiment_notes/`](experiment_notes/) | The **elastomeric-bomb** experiment protocol: catheter configuration codes (C0–C4), pump-reuse tracking (a/b), and the analysis + alignment that turns raw logs into comparable flow profiles. |
+| **The application** | [`experimental_analysis/`](experimental_analysis/), `.env` experiment metadata, [`experiment_notes/`](experiment_notes/) | The **elastomeric-bomb** experiment protocol: the 8 condition codes (`C0a`–`C4`), pump-reuse tracking (`a`/`b`), and the analysis + alignment that turns raw logs into comparable flow profiles. |
 
 If you only need the sensor logger, `raspberry/` stands alone. The rest of this
 repo is the infusion-pump study built on top of it.
@@ -83,36 +83,78 @@ ls ./logs/    # events.log  logs.txt  error_logs.txt
 ```
 
 ### 4. Analyze
+
+The analysis is a package of single-responsibility modules; `main.py` is the entry
+point and must be run **from inside `experimental_analysis/`** (the modules import
+each other by name, the same convention `raspberry/` uses).
+
 ```bash
 pip install -r experimental_analysis/requirements.txt
+cd experimental_analysis
 
-python3 experimental_analysis/analyse.py data/C2_rep_1.csv [more.csv ...] \
-    --output-dir results/ \
-    --zero-drift-min 60 \
-    --empty-pump-min 30 \
-    --align onset
+python3 main.py                          # the whole campaign, auto-discovered
+python3 main.py Temp/C2/C2_rep_1.csv     # or specific runs
 ```
-With **no CSV arguments**, `analyse.py` auto-discovers every `Temp/C*/*.csv`
-under `experimental_analysis/Temp/`.
+
+Options:
+
+| Flag | Purpose | Default |
+|---|---|---|
+| `--output-dir` | root output directory | `results/` |
+| `--offset-window-h` | hours from logging start used to measure the zero-flow offset | `2.0` |
+| `--ma-window-min` | moving-average filter window, in minutes | `10` |
+| `--plot-format` | **one** of `png` / `pdf` / `svg` | `png` |
+| `--dpi` | raster DPI (200–300 recommended) | `250` |
+
+With no CSV arguments it auto-discovers every `Temp/C*/*.csv` belonging to the 8
+study conditions.
+
+#### Module layout
+
+| Module | Responsibility |
+|---|---|
+| `main.py` | entry point: what runs, in what order — no maths, no plotting |
+| `config.py` | the 8 conditions and the declared methodology; one home for every declared parameter |
+| `csv_io.py` | reading the logger's files: metadata header, data rows, footer status |
+| `signal_processing.py` | air handling, offset correction, filtering, integration, event detection |
+| `stats.py` | quantities computed from the data: noise + FFT, correlation, temperature, filter chain |
+| `figures.py` | every plot; hue means condition, line style means replicate |
+| `pipeline.py` | one CSV → one set of results, or `IncompleteRun` |
+| `aggregate.py` | averaging a condition's replicates onto a common grid |
+| `report.py` | `summary.md` |
 
 ---
 
-## Catheter configurations
+## Experiment conditions
 
-The application compares flow behavior across these in-line configurations:
+The study has **exactly 8 conditions**. This is the canonical list: `main.py`
+**rejects** a `--configuration` that is not one of them, so a run cannot be
+launched under an ad-hoc label. The same list lives in `raspberry/core.py`
+(`CONFIG_NAMES`) and in `experimental_analysis/config.py` (`STUDY_CONDITIONS`).
 
-| Code | Description |
-|------|-------------|
-| `C0`  | Sin catéter (línea base) |
-| `C1a` | Contiplex 40 cm (3 orificios laterales) — bomba primera vez |
-| `C1b` | Contiplex 40 cm (3 orificios laterales) — bomba segunda vez |
-| `C2`  | Contiplex 40 cm + filtro Perifix 0,2 µm |
-| `C3`  | Contiplex 100 cm (3 orificios laterales) |
-| `C4`  | (Contiplex C) Catéter peridural pediátrico (orificio terminal) |
+| Code | Description | Reps |
+|------|-------------|------|
+| `C0a` | Sin catéter — bomba primera vez | 3 |
+| `C0b` | Sin catéter — bomba segunda vez | 3 |
+| `C0c` | Sin catéter — solución con bupivacaína (NaCl 240 mL + BuPi 60 mL) | 1 |
+| `C1a` | Contiplex 40 cm (3 orificios laterales) — bomba primera vez | 3 |
+| `C1b` | Contiplex 40 cm (3 orificios laterales) — bomba segunda vez | 3 |
+| `C2`  | Contiplex 40 cm + filtro Perifix 0,2 µm | 3 |
+| `C3`  | Contiplex 100 cm (3 orificios laterales) | 3 |
+| `C4`  | (Contiplex C) Catéter peridural pediátrico (orificio terminal) | 3 |
 
-`C1a`/`C1b` share a catheter type; `a` is a first-use pump and `b` a second-use
-pump, to evaluate deterioration with reuse. Per-configuration field notes live in
-[`experiment_notes/`](experiment_notes/).
+The `a`/`b` suffix denotes **pump reuse** — `a` is a first-use pump, `b` a
+second-use pump — so the same catheter type is compared against itself as the pump
+deteriorates. `C0c` is the no-catheter condition run with the bupivacaine solution
+instead of plain saline, and is a **single run** by design.
+
+Per-condition field notes live in [`experiment_notes/`](experiment_notes/).
+
+> **`C0_baseline` is not one of the 8.** It is a preliminary run predating this
+> protocol: logged at 1 Hz instead of 10 s, with no metadata header and no
+> `sample_index` column. Auto-discovery **skips it** so it
+> cannot be silently mixed into the cross-condition comparison; pass its path
+> explicitly if you want to analyse it on its own.
 
 ---
 
@@ -180,13 +222,22 @@ See [`raspberry/BINARY_FORMAT.md`](raspberry/BINARY_FORMAT.md) for the format sp
 │   └── requirements.txt
 │
 ├── experimental_analysis/      ← APPLICATION: post-experiment analysis
-│   ├── analyse.py              ← onset detection, flow profiles, comparison overlay
+│   ├── main.py                 ← entry point: orchestrates the analysis
+│   ├── config.py               ← the 8 conditions + declared methodology
+│   ├── csv_io.py               ← metadata header, data rows, footer status
+│   ├── signal_processing.py    ← air, offset, filtering, integration, events
+│   ├── stats.py                ← noise + FFT, correlation, temperature, filter chain
+│   ├── figures.py              ← the three curves, per run and per condition
+│   ├── pipeline.py             ← one CSV → one set of results
+│   ├── aggregate.py            ← averaging a condition's replicates
+│   ├── report.py               ← summary.md
 │   ├── utils.py utils_mpl.py   ← analysis + matplotlib helpers
 │   ├── SLF3S-0600F_filters.py  ← filter frequency-response explorer
+│   ├── fetch_data.sh           ← scp data from the Raspberry Pis
 │   ├── requirements.txt
 │   └── Temp/                   ← sample data for local analysis
 │
-└── experiment_notes/           ← APPLICATION: per-configuration field notes (C0–C4)
+└── experiment_notes/           ← APPLICATION: per-condition field notes (the 8 codes)
 ```
 
 Generated at runtime (Docker host mounts): `./data/` (`{CONFIG}_{REP}.csv/.bin`)
@@ -202,16 +253,35 @@ and `./logs/` (`events.log`, `logs.txt`, `error_logs.txt`).
 | `--baudrate` | `int` | Serial baud rate | `115200` |
 | `--slave-address` | `int` | SHDLC slave address | `0x00` |
 | `--hours-to-log` | `float` | Acquisition duration (hours) | `48` |
-| `--sampling-ms` | `int` | Serial polling interval (ms) | `500` |
-| `--configuration` | `str` | Catheter configuration code (see table) | `UNKNOWN` |
+| `--sampling-ms` | `int` | Acquisition period — **locked**, only `10000` accepted | `10000` |
+| `--configuration` | `str` | Condition code; **must** be one of the 8 (see table) | `UNKNOWN` → rejected |
 | `--experiment-rep` | `str` | Replicate id, e.g. `rep_1` | `UNKNOWN` |
 | `--pump-lot` | `str` | Pump manufacturing lot number | `UNKNOWN` |
 | `--fluid` | `str` | Fluid description | `UNKNOWN` |
-| `--raspberry-id` | `str` | Raspberry Pi identifier | `UNKNOWN` |
+| `--raspberry-id` | `str` | Raspberry Pi identifier (fleet in use: 1, 2, 3, 8, 9, 10) | `UNKNOWN` |
 | `--dry-run` | flag | Generate synthetic data without a sensor | — |
 | `--verify-binary` | `str` | Validate an existing `.bin` and exit | — |
 
-> `--sampling-ms` is the serial polling interval; the sensor's internal
-> measurement rate is set separately in `raspberry/shdlc_command.py`
-> (`ShdlcStartContinuousMeasurement._MEASUREMENT_INTERVAL_X_MS`). All events
-> (INFO/WARNING/ERROR) go to stdout and `Logs/events.log` with ms timestamps.
+### Acquisition rate: `f_ro = f_s = 10 s`
+
+The sensor's internal readout period (`f_ro`) and the serial polling period
+(`f_s`) are **locked together at 10 s (0.1 Hz)** and cannot be set independently:
+
+- The single source of truth is **`core.SAMPLING_INTERVAL`** in
+  `raspberry/core.py`. `shdlc_driver` configures the sensor from that same value
+  via `core.measurement_interval_bytes()`, so the two agree by construction —
+  there is no second literal to fall out of sync.
+- `main.py` **rejects** a `--sampling-ms` different from it, with an error naming
+  the intervals the sensor supports (20, 50, 100, 1000, 10000, 60000 ms).
+- To change the project's acquisition rate, edit `core.SAMPLING_INTERVAL` and
+  nothing else.
+
+**Why it is enforced rather than documented.** The CSV metadata records `f_ro_hz`
+derived from the polling period. If polling ran faster than the sensor's readout,
+consecutive polls would return the *same* internal measurement while that field
+claimed a rate the sensor never produced. Nothing would fail — the logger would
+keep writing rows — and a multi-day file nobody re-derives would carry a wrong
+sampling rate. Failing at launch is cheaper than discovering it after 96 hours.
+
+All events (INFO/WARNING/ERROR) go to stdout and `Logs/events.log` with ms
+timestamps.
