@@ -3,8 +3,8 @@ set -euo pipefail
 
 DEST="$(dirname "$0")"
 REMOTE_DIR="~/Desktop/Sensirion-SLF3S-0600F-driver/data/"
-HOSTS=("pi2" "pi9" "pi10")
-USER="control"
+HOSTS="pi8"
+USER="raspberrypi"
 
 mkdir -p "$DEST"
 
