@@ -35,11 +35,21 @@ print(f"Moving average  N={N}:     f_-3dB = {f_ma:.4f} Hz")
 print(f"Exponential IIR α={alpha}: f_-3dB = {f_ema:.4f} Hz")
 
 # ── Closed-form IIR cutoff (verification) ────────────────────
+# For H(z) = alpha / (1 - beta*z^-1), beta = 1-alpha, the DC gain is 1 and
+#     |H(w)|^2 = alpha^2 / (1 - 2*beta*cos(w) + beta^2)
+# Setting |H|^2 = 1/2 gives cos(w_c) = (1 + beta^2 - 2*alpha^2) / (2*beta).
+#
+# The previous expression here was (2*beta^2 + 2*beta - 1)/(2*beta), which for
+# alpha=0.0125 evaluates to 1.481 — outside the domain of arccos. The guard below
+# then skipped the print, so this "verification" silently never ran. The form
+# below returns 4.0040 Hz, matching the numerical freqz sweep above.
 beta = 1 - alpha
-arg  = (2*beta**2 + 2*beta - 1) / (2*beta)
+arg  = (1 + beta**2 - 2*alpha**2) / (2*beta)
 if abs(arg) <= 1:
     f_ema_exact = fs / (2*np.pi) * np.arccos(arg)
     print(f"IIR cutoff (closed-form): {f_ema_exact:.4f} Hz")
+else:
+    print("IIR cutoff (closed-form): out of arccos domain — check alpha")
 
 # ── Infusion dynamics reference band ─────────────────────────
 # 5 mL/hr pump: dominant variation timescale ~ hours
