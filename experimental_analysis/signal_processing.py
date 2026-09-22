@@ -84,6 +84,101 @@ def air_report(df: pd.DataFrame, air: np.ndarray, t_h: np.ndarray,
     }
 
 
+def bubble_mask(flow_corr: np.ndarray, df: pd.DataFrame, spike_frac: float,
+                zero_frac: float, guard: int, max_plateau: int) -> np.ndarray:
+    """
+    Samples belonging to a bubble transit, which `Flag_Air` does not fully cover.
+
+    A gas front crossing the measurement section reads as a burst, not as air: a
+    large excursion as it enters, a near-zero plateau while it occupies the sensor,
+    and a second excursion as it leaves. The sensor flags the plateau far more
+    reliably than the spikes — across this campaign 143 of 167 excursions above
+    1.5x nominal carry no air flag, and they integrate into the dispensed volume as
+    if they were flow.
+
+    The mask is the union of three parts:
+
+      spike    |q| over `spike_frac` x nominal, OR Flag_High_Flow set. Both are
+               needed: C1a_rep_3 has 58 excursions the sensor never flagged, and
+               C2_rep_3 has flags with no large excursion.
+      plateau  a contiguous near-zero run that TOUCHES a spike and is no longer
+               than `max_plateau` samples. BOTH conditions are load-bearing. The
+               end of infusion is legitimately near zero, so an unconditional
+               near-zero rule would delete the decay this study exists to measure;
+               and "touches a spike" alone is not enough either, because a spike
+               landing at the start of that decay makes the whole tail one
+               contiguous run — C2_rep_2 lost 18.5 h that way and was wrongly
+               demoted to "incomplete" before the length cap existed.
+      guard    `guard` samples on each side of a spike, because the sensor's IIR
+               smoothing spreads a step into its neighbours.
+
+    Returns a boolean mask over all samples. Pure function of its inputs.
+    """
+    nominal = NOM_FLOW_ML_HR / UL_MIN_TO_ML_HR
+    high = df.get("Flag_High_Flow")
+    high_mask = (
+        high.to_numpy(dtype=np.float64) > 0.5 if high is not None
+        else np.zeros(len(flow_corr), dtype=bool)
+    )
+    spike = (np.abs(flow_corr) > spike_frac * nominal) | high_mask
+    if not spike.any():
+        return np.zeros(len(flow_corr), dtype=bool)
+
+    # Guard band: dilate the spike mask by `guard` samples on each side.
+    mask = spike.copy()
+    for k in range(1, guard + 1):
+        mask[k:] |= spike[:-k]
+        mask[:-k] |= spike[k:]
+
+    # Plateau: keep only the near-zero runs that touch the dilated spike mask.
+    near_zero = np.abs(flow_corr) < zero_frac * nominal
+    if near_zero.any():
+        # Label contiguous near-zero runs, then keep a run whole if any of its
+        # samples is adjacent to a spike. Done run-wise rather than sample-wise so
+        # a long plateau is removed entirely, not just at its two ends.
+        edges = np.diff(near_zero.astype(np.int8))
+        starts = list(np.where(edges == 1)[0] + 1)
+        ends = list(np.where(edges == -1)[0])
+        if near_zero[0]:
+            starts.insert(0, 0)
+        if near_zero[-1]:
+            ends.append(len(near_zero) - 1)
+        for s, e in zip(starts, ends):
+            if (e - s + 1) <= max_plateau and mask[s:e + 1].any():
+                mask[s:e + 1] = True
+    return mask
+
+
+def bubble_report(bubble: np.ndarray, t_h: np.ndarray, flow_corr: np.ndarray,
+                  t_s: np.ndarray) -> dict:
+    """
+    What the bubble mask removed — reported so a result can be audited against it.
+
+    `volume_removed_mL` is the excess those samples CARRIED, relative to the median
+    of what survives. It is deliberately NOT the net change in dispensed volume,
+    and the two differ substantially: dropping a sample does not subtract its
+    contribution, it hands the span to the trapezoid, which bridges the gap at the
+    level of the surviving neighbours. In C1a_rep_3 this field reads +1.549 mL while
+    the dispensed volume moves by 0.05 mL. Read it as "how much artefact was in
+    these samples", never as "how much the result changed".
+    """
+    intervals = contiguous_intervals(bubble, t_h)
+    kept = flow_corr[~bubble & np.isfinite(flow_corr)]
+    baseline = float(np.median(kept)) if kept.size else 0.0
+    removed_ml = 0.0
+    if bubble.any() and len(t_s) == len(flow_corr):
+        Ts = float(np.median(np.diff(t_s))) if len(t_s) > 1 else 0.0
+        removed_ml = float(np.sum(flow_corr[bubble] - baseline) * Ts / 60000.0)
+    return {
+        "n_samples": int(bubble.sum()),
+        "fraction_total": round(float(bubble.mean()), 6),
+        "n_events": len(intervals),
+        "volume_removed_mL": round(removed_ml, 4),
+        "baseline_ul_min": round(baseline, 4),
+        "intervals_h": [[round(a, 4), round(b, 4)] for a, b in intervals[:20]],
+    }
+
+
 def offset_report(flow_raw: np.ndarray, t_h: np.ndarray, air: np.ndarray,
                   window_h: float, leading_air_end_h: float = None) -> dict:
     """

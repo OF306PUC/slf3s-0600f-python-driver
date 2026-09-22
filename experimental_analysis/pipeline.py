@@ -18,6 +18,8 @@ import signal_processing as sp
 import stats as st
 import utils_mpl
 from config import (
+    BUBBLE_GUARD_SAMPLES, BUBBLE_MAX_PLATEAU_MIN, BUBBLE_SPIKE_FRAC,
+    BUBBLE_ZERO_FRAC,
     MA_WINDOW_MIN, NOM_FLOW_CORR_ML_HR, NOM_VOLUME_ML, OFFSET_WINDOW_H, REL_ERROR,
     STUDY_CONDITIONS, TEFF_FRAC_OF_NOMINAL, UL_MIN_TO_ML_HR,
     colour_for, description_for, linestyle_for, methodology_provenance,
@@ -107,11 +109,29 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
             condition, experiment_rep, {"offset_ul_min": offs["offset_ul_min"]},
         )
 
+    # ── bubble transits ───────────────────────────────────────────────────────
+    # Run AFTER the offset because the spike test is on the corrected flow, and
+    # BEFORE onset/keep because a bubble sample must not qualify as flow anywhere.
+    # The offset window itself is deliberately left alone: it was checked across
+    # all 18 runs and none contains a spike, so the zero is not contaminated and
+    # excluding bubbles there would change nothing except add a code path.
+    max_plateau = max(1, int(round(BUBBLE_MAX_PLATEAU_MIN * 60.0 / Ts)))
+    bubble = sp.bubble_mask(flow_corr, df, BUBBLE_SPIKE_FRAC, BUBBLE_ZERO_FRAC,
+                            BUBBLE_GUARD_SAMPLES, max_plateau)
+    bubble_info = sp.bubble_report(bubble, t_log_h, flow_corr, t)
+    excluded = air | bubble
+    if bubble_info["n_samples"]:
+        print(f"  bubbles {bubble_info['n_samples']} sample(s) in "
+              f"{bubble_info['n_events']} event(s), "
+              f"{bubble_info['volume_removed_mL']:+.3f} mL removed")
+
     # ── onset → t = 0, and cut everything before it ───────────────────────────
     # Threshold is 3σ of the offset window above the corrected zero; the air-free
-    # requirement is what keeps t = 0 off the purge (see find_onset).
+    # requirement is what keeps t = 0 off the purge (see find_onset). Bubble
+    # samples are excluded from the same test: a transit spike is above any
+    # sensible threshold and must never be allowed to define t = 0.
     onset_threshold = 3.0 * offs["sigma_ul_min"]
-    onset_s = sp.find_onset(t - t[0], flow_corr, onset_threshold, ~air)
+    onset_s = sp.find_onset(t - t[0], flow_corr, onset_threshold, ~excluded)
     onset_h = float(onset_s / 3600.0) if onset_s is not None else None
     if onset_h is None:
         raise IncompleteRun(
@@ -120,7 +140,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
             condition, experiment_rep,
         )
 
-    keep = (t_log_h >= onset_h) & (~air) & np.isfinite(flow_corr)
+    keep = (t_log_h >= onset_h) & (~excluded) & np.isfinite(flow_corr)
     if keep.sum() < 10:
         raise ValueError("fewer than 10 usable samples after onset/air filtering")
 
@@ -133,10 +153,13 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
     q_corr = flow_corr[keep]
     temp = temp_raw[keep]
 
-    # Air intervals that fall inside the plotted window, re-based to onset.
+    # Shaded intervals: every excluded sample, air and bubble alike. They get one
+    # shading because they mean the same thing to a reader — "no measurement of
+    # liquid flow here" — while `stats.json` keeps the two counted separately for
+    # anyone who needs to know which mechanism removed what.
     air_intervals = [
         [max(a - onset_h, float(t_h[0])), b - onset_h]
-        for a, b in sp.contiguous_intervals(air, t_log_h) if b > onset_h
+        for a, b in sp.contiguous_intervals(excluded, t_log_h) if b > onset_h
     ]
 
     # ── filtering, noise, volume ──────────────────────────────────────────────
@@ -198,6 +221,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
             "n_samples_analysed": int(keep.sum()),
         },
         "air": air_info,
+        "bubbles": bubble_info,
         "offset_correction": offs,
         "onset": {"t_onset_h_on_logging_timebase": round(onset_h, 4),
                   "detected": onset_s is not None,
@@ -247,6 +271,11 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
         "linestyle": linestyle_for(experiment_rep),
         "t_h": t_h,
         "flow_ml_hr": q_filt_ml_hr,
+        # The unfiltered (offset-corrected) trace is kept alongside the filtered one
+        # so the replicate matrix can show both without re-reading and re-processing
+        # every CSV. Condition averaging uses `flow_ml_hr` and ignores this.
+        "flow_raw_ml_hr": q_raw_ml_hr,
+        "air_intervals": air_intervals,
         "temperature_C": temp,
         "volume_ml": vol_ml,
         "stats": stats,

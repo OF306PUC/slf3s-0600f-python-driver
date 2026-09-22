@@ -17,6 +17,8 @@ import pathlib
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 
 import utils_mpl
@@ -72,7 +74,7 @@ def _shade_air(ax, intervals: list) -> None:
     """
     for i, (a, b) in enumerate(intervals):
         ax.axvspan(a, b, color=AIR_SHADE, alpha=0.5, lw=0, zorder=0,
-                   label="air in line (samples excluded)" if i == 0 else None)
+                   label="air / bubble (samples excluded)" if i == 0 else None)
 
 
 def _nice_ticks(lo: float, hi: float, n: int = 9) -> np.ndarray:
@@ -217,6 +219,119 @@ def plot_condition_mean(curve: dict, kind: str, out_dir: pathlib.Path,
     _finish(fig, ax, r"Time since infusion onset (hours)", ylabel,
             (float(t_h[0]), float(t_h[-1])), y_bnd, y_fmt=y_fmt)
     _save_fig(fig, str(out_dir / f"{condition}_mean_{kind}"))
+
+
+def _tex_escape(s: str) -> str:
+    """
+    Escape what LaTeX would otherwise read as markup.
+
+    Run names carry underscores (`C0a_rep_1`), and with `text.usetex=True` an
+    unescaped `_` is a subscript operator: the label renders as "C0arep1" with the
+    tail lowered, or LaTeX aborts outright. Only run names reach on-plot text, so
+    escaping the underscore is enough.
+    """
+    return s.replace("_", r"\_")
+
+
+def plot_replicate_matrix(runs: list, out_dir: pathlib.Path, ma_window_min: float,
+                          ncols: int = 3) -> None:
+    """
+    Every replicate's flow profile as small multiples — raw and filtered only.
+
+    One panel per run instead of one crowded axis: 18 overlaid profiles cannot be
+    read, and the question this figure answers is per-run (does any single
+    replicate misbehave?), not cross-run. The cross-run comparison already has its
+    own figure, `comparison_condition_means`.
+
+    Panels are packed row-major with no empty cells and share BOTH axes, so a
+    difference in shape is a real difference and never a difference in scale.
+    """
+    if not runs:
+        return
+
+    # Condition order comes from the study definition, never from discovery order:
+    # a run added or removed must not reshuffle the grid.
+    order = {c: i for i, c in enumerate(STUDY_CONDITIONS)}
+    runs = sorted(runs, key=lambda r: (order.get(r["condition"], len(order)),
+                                       r["replicate"]))
+    n = len(runs)
+    nrows = int(np.ceil(n / ncols))
+
+    # One scale for all panels, derived from the FILTERED curves — the same rule
+    # the per-run figure uses. In the noisiest run the raw trace swings an order of
+    # magnitude wider than the signal; letting it set the shared scale would flatten
+    # all 18 panels to defend one. Raw clips instead, exactly as it already does in
+    # the single-run figure.
+    y_lo = min(-0.5, min(float(np.nanmin(r["flow_ml_hr"])) for r in runs))
+    y_hi = max(NOM_FLOW_ML_HR + 2.0,
+               max(float(np.nanmax(r["flow_ml_hr"])) for r in runs))
+    x_hi = max(float(r["t_h"][-1]) for r in runs)
+
+    fig, axes = utils_mpl.get_fig_subplots(
+        nrows, ncols, size=(3.7 * ncols, 2.15 * nrows), dpi=150,
+        sharex=True, sharey=True,
+    )
+    axes = np.atleast_1d(axes).reshape(nrows, ncols)
+
+    for k, run in enumerate(runs):
+        ax = axes[k // ncols][k % ncols]
+        colour = run["colour"]
+        # Air shading without labels: the figure-level legend carries one entry for
+        # all of them, so per-panel labels would repeat it up to 18 times.
+        for a, b in run.get("air_intervals", []):
+            ax.axvspan(a, b, color=AIR_SHADE, alpha=0.5, lw=0, zorder=0)
+        ax.plot(run["t_h"], run["flow_raw_ml_hr"], lw=0.35, color=colour, alpha=0.35)
+        ax.plot(run["t_h"], run["flow_ml_hr"], lw=1.1, color=colour)
+        ax.axhline(NOM_FLOW_ML_HR, color=INK_PRIMARY, lw=0.7, ls="--", zorder=1)
+        ax.set_title(_tex_escape(run["experiment_name"]), fontsize=9, pad=3)
+        utils_mpl.set_grid(fig, ax, major=True, minor=False)
+
+    for k in range(n, nrows * ncols):
+        axes[k // ncols][k % ncols].axis("off")
+
+    xticks = _nice_ticks(0.0, x_hi, n=5)
+    yticks = _nice_ticks(y_lo, y_hi, n=5)
+    for r_i in range(nrows):
+        for c_i in range(ncols):
+            if r_i * ncols + c_i >= n:
+                continue
+            ax = axes[r_i][c_i]
+            utils_mpl.set_format(ax.xaxis, ticks=xticks,
+                                 fmt=utils_mpl.make_formatter(".0f"))
+            utils_mpl.set_format(ax.yaxis, ticks=yticks,
+                                 fmt=utils_mpl.make_formatter(".1f"))
+            utils_mpl.set_x_axis(ax, bnd=(0.0, x_hi), margin=0.02)
+            utils_mpl.set_y_axis(ax, bnd=(y_lo, y_hi), margin=0.05)
+            # Axis labels only on the outer edge: repeating them in every cell is
+            # the fastest way to make a small-multiples grid unreadable.
+            # "Outer edge" is the last panel in each COLUMN, which is not always the
+            # last row — a partly-filled final row leaves some columns ending early.
+            # Those panels also need their tick labels switched back on: `sharex`
+            # hides them everywhere but the bottom row, which would otherwise leave
+            # an axis labelled in words and unlabelled in numbers.
+            if r_i == nrows - 1 or (r_i + 1) * ncols + c_i >= n:
+                ax.set_xlabel(r"Time since onset (h)", fontsize=9)
+                ax.tick_params(labelbottom=True)
+            if c_i == 0:
+                ax.set_ylabel(r"$q(t)$ (mL/hr)", fontsize=9)
+
+    # Proxy handles in neutral ink: this legend explains the ENCODING (raw vs
+    # filtered vs guide), not identity. Identity is the panel title, and hue still
+    # means condition as everywhere else in the study.
+    handles = [
+        Line2D([], [], color=INK_SECONDARY, lw=1.0, alpha=0.5,
+               label="offset-corrected flow (unfiltered)"),
+        Line2D([], [], color=INK_SECONDARY, lw=1.6,
+               label=fr"filtered ({ma_window_min:.0f} min mean)"),
+        Line2D([], [], color=INK_PRIMARY, lw=0.9, ls="--",
+               label=fr"$q_{{nom}} = {NOM_FLOW_ML_HR:.0f}$ mL/hr"),
+        Patch(facecolor=AIR_SHADE, alpha=0.5,
+              label="air / bubble (samples excluded)"),
+    ]
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles), fontsize=9,
+               bbox_to_anchor=(0.5, 1.0), borderaxespad=0.0)
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    _save_fig(fig, str(out_dir / "comparison_replicate_matrix"))
 
 
 def plot_condition_overlay(curves: dict, out_dir: pathlib.Path) -> None:

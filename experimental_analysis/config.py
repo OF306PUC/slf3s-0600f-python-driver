@@ -170,6 +170,40 @@ OFFSET_IMPLAUSIBLE_FRAC = 0.10
 # noise of a quiet 2-hour window, so the gate has to be scaled to the signal.
 TEFF_FRAC_OF_NOMINAL = 0.05
 
+# ── Bubble transit rejection ──────────────────────────────────────────────────
+# A bubble crossing the measurement section does not read as "air" throughout.
+# It reads as a burst: a large flow excursion as the gas front enters, a near-zero
+# plateau while the bubble occupies the sensor, and a second excursion as it
+# leaves. `Flag_Air` covers the plateau but not reliably the flanking spikes —
+# measured across this campaign, 143 of 167 excursions above 1.5x nominal carry no
+# air flag at all, and in C1a_rep_3 and both C4 runs not one of the 97 excursions
+# is flagged. Left in, they enter the curves and the volume integral as if they
+# were flow.
+#
+# Detection is the UNION of two criteria because neither is sufficient alone:
+# C1a_rep_3 has 58 excursions with zero `Flag_High_Flow` set, and C2_rep_3 has 3
+# high-flow flags with no large excursion.
+BUBBLE_SPIKE_FRAC = 1.5    # |q| above this multiple of nominal is an excursion
+BUBBLE_ZERO_FRAC = 0.10    # |q| below this multiple of nominal is "plateau"
+# Samples of guard on each side of an excursion. The sensor's own IIR smoothing
+# spreads a step over neighbouring samples, so the sample next to a 3000 µL/min
+# spike is already contaminated even when it looks ordinary.
+BUBBLE_GUARD_SAMPLES = 2
+
+# Longest near-zero run still attributable to a bubble sitting in the sensor.
+# WITHOUT this cap the plateau clause is actively destructive: a spike landing at
+# the start of the end-of-infusion decay makes the entire post-infusion tail one
+# contiguous near-zero run that "touches a spike", and the whole thing is deleted.
+# It happened — C2_rep_2 lost 18.5 h (19 % of its record) and was demoted to
+# "incomplete" because find_teff could no longer see the flow settle.
+#
+# 5 min is where the data separates, not a round number: across the campaign, 89
+# near-zero runs touch a spike, with a median of 0.67 min and a 90th percentile of
+# 2.17 min. The next four are 7.5, 151, 552 and 1107 min — and all four are
+# identifiable as the purge or an infusion tail, never a bubble. Physically the cap
+# is generous: at 83 µL/min a bubble crosses the measurement section in seconds.
+BUBBLE_MAX_PLATEAU_MIN = 5.0
+
 
 # ── Sensor internal filter ────────────────────────────────────────────────────
 # methodology.txt: "f_ro = 0.1 Hz también por ende el sensor utiliza el filtro
@@ -231,6 +265,20 @@ def methodology_provenance() -> dict:
             "air-flagged samples are excluded from all curves and from the "
             "volume integral; the plotted line interpolates across the gap and "
             "the interval is shaded"
+        ),
+        "bubble_rejection_spike_frac_of_nominal": BUBBLE_SPIKE_FRAC,
+        "bubble_rejection_zero_frac_of_nominal": BUBBLE_ZERO_FRAC,
+        "bubble_rejection_guard_samples": BUBBLE_GUARD_SAMPLES,
+        "bubble_rejection_max_plateau_min": BUBBLE_MAX_PLATEAU_MIN,
+        "bubble_rejection_note": (
+            "a bubble crossing the sensor reads as a large flow excursion, a "
+            "near-zero plateau, and a second excursion — not as air throughout. "
+            "Samples matching that signature (|q| above the spike fraction OR "
+            "Flag_High_Flow set, any contiguous near-zero run touching such a "
+            "spike and no longer than the plateau cap, plus a guard on each "
+            "side) are excluded exactly as air is. "
+            "The near-zero criterion applies ONLY next to a spike: the end of "
+            "infusion is legitimately near zero and must not be rejected"
         ),
         "nominal_flow_ml_hr": NOM_FLOW_ML_HR,
         "corrected_nominal_flow_ml_hr_at_declared_T": round(NOM_FLOW_CORR_ML_HR, 4),

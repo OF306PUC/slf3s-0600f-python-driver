@@ -25,7 +25,8 @@ plotting, no formatting. Each step belongs to one module:
 
 Outputs, per run: three curves (flow, temperature, volume) + stats.json.
 Outputs, per condition: the same three curves averaged across its replicates.
-Plus a cross-condition overlay and summary.md.
+Plus a cross-condition overlay, a replicate matrix (every run's raw + filtered flow
+as small multiples), and summary.md.
 
 Runs whose acquisition did not finish cleanly, that never reach an infusion onset,
 or that never reach the end of infusion produce NO figures and NO stats: they are
@@ -161,6 +162,10 @@ def main() -> None:
         report_path = report.write_summary_report(runs, incomplete, not_performed, curves,
                                       params, out_root)
         print(f"\n[analyse] summary → {report_path}")
+    if runs:
+        figures.plot_replicate_matrix(runs, out_root, args.ma_window_min)
+        print(f"[analyse] replicate matrix ({len(runs)} runs) → "
+              f"{out_root / 'comparison_replicate_matrix'}.{args.plot_format}")
     if len(curves) > 1:
         figures.plot_condition_overlay(curves, out_root)
         print(f"[analyse] condition overlay → "

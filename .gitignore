@@ -30,6 +30,9 @@ experiment_notes/**/*.jpeg
 experiment_notes/**/*.png
 experiment_notes/**/*.heic
 
+# Personal documents
+docs_liquid_flowmeter/
+
 # ── AI tooling and its documentation: LOCAL ONLY, never committed ─────────────
 # This repo publishes the driver and the analysis, not the assistant scaffolding
 # that helped write them.
