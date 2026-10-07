@@ -19,6 +19,24 @@ import queue as queue_module
 log = logging.getLogger(__name__)
 
 STARTUP_ATTEMPTS = 3
+PORT_SETTLE_S = 0.5
+
+
+def _execute_startup(interface, slave_address, command, label, port):
+    """Execute a start-up command, retrying when the adapter does not answer."""
+    for attempt in range(1, STARTUP_ATTEMPTS + 1):
+        try:
+            return interface.execute(slave_address, command)
+        except RuntimeError as exc:
+            log.warning("%s: no response from the adapter (attempt %d/%d): %s",
+                        label, attempt, STARTUP_ATTEMPTS, exc)
+            if attempt == STARTUP_ATTEMPTS:
+                raise RuntimeError(
+                    f"the adapter on {port} never answered. Check that no other "
+                    f"process or container is using the port (docker ps; fuser "
+                    f"{port}), that {port} is the sensor cable and not another "
+                    f"USB-serial device, and unplug/replug the cable") from exc
+            time.sleep(1)
 
 
 def in_device_communication(
@@ -55,22 +73,12 @@ def _run_communication(
         i2c_transceive_stop_cmd = ShdlcStopContinuousMeasurement(
             stop_code=ShdlcStopContinuousMeasurement._I2C_STOP_CODE
         )
-        # First frame after opening the port: the adapter may still be settling
-        # (or answering a previous session), so retry before giving up.
-        for attempt in range(1, STARTUP_ATTEMPTS + 1):
-            try:
-                _, error = interface.execute(slave_address, i2c_transceive_stop_cmd)
-                break
-            except RuntimeError as exc:
-                log.warning("(1) No response from the adapter (attempt %d/%d): %s",
-                            attempt, STARTUP_ATTEMPTS, exc)
-                if attempt == STARTUP_ATTEMPTS:
-                    raise RuntimeError(
-                        f"the adapter on {port} never answered. Check that no other "
-                        f"process or container is using the port (docker ps; fuser "
-                        f"{port}), that {port} is the sensor cable and not another "
-                        f"USB-serial device, and unplug/replug the cable") from exc
-                time.sleep(1)
+        # The adapter does not always answer the first frames after the port is
+        # opened (seen intermittently on hardware), so give it a moment and retry
+        # every start-up command before giving up.
+        time.sleep(PORT_SETTLE_S)
+        _, error = _execute_startup(interface, slave_address, i2c_transceive_stop_cmd,
+                                    "(1) stop", port)
         log.info("(1) Stopping continuous measurement")
         if error:
             log.warning("Stop command returned error state: %s", error)
@@ -85,7 +93,8 @@ def _run_communication(
             rx_length=0,                                    # write only; waits 60 ms warm-up
             max_response_time=0.1,
         )
-        _, error = interface.execute(slave_address, i2c_start_cmd)
+        _, error = _execute_startup(interface, slave_address, i2c_start_cmd,
+                                    "(2) start", port)
         log.info(
             "(2) Sensor continuous measurement started over I2C (single reader, "
             "f_ro = f_s = %d ms)", sampling_interval,
@@ -96,7 +105,8 @@ def _run_communication(
 
         # I2C Transceive command to check continuous measurement status:
         i2c_transceive_status_cmd = ShdlcGetContinuousMeasurementStatus()
-        status_data, error  = interface.execute(slave_address, i2c_transceive_status_cmd)
+        status_data, error = _execute_startup(interface, slave_address,
+                                              i2c_transceive_status_cmd, "(3) status", port)
         if status_data is None:
             log.info("(3) Adapter continuous measurement: OFF — single reader (correct)")
         else:
