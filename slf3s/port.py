@@ -135,6 +135,27 @@ class ShdlcSerialPort(ShdlcPort):
         self._serial.port = port
         if do_open:
             self.open()
+        self._enable_low_latency()
+
+    def _enable_low_latency(self):
+        """
+        Ask the USB-serial driver for its low-latency mode.
+
+        The SCC1 adapter is FTDI-based, and on Linux ftdi_sio holds received bytes
+        for up to its latency timer — 16 ms by default — before passing them on.
+        Every request/response round trip can therefore take ~16 ms longer than
+        the wire time. At a 20 ms readout that is most of the interval; low-latency
+        mode drops the timer to 1 ms. Best effort: on a platform or driver without
+        support the port keeps working, only slower, and the warning says so.
+        """
+        if not self._serial.is_open:
+            return
+        try:
+            self._serial.set_low_latency_mode(True)
+            log.info("Serial port low-latency mode enabled")
+        except (AttributeError, ValueError, OSError) as exc:
+            log.warning("Could not enable serial low-latency mode (%s); round trips "
+                        "may take up to ~16 ms longer", exc)
 
     def __enter__(self):
         return self
@@ -210,6 +231,7 @@ class ShdlcSerialPort(ShdlcPort):
         """
         if self._serial.is_open is False:
             self._serial.open()
+            self._enable_low_latency()
 
     def close(self):
         """

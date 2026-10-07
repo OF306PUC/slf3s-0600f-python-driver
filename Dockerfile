@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-WORKDIR /app/raspberry
+WORKDIR /app/slf3s
 
-COPY raspberry/requirements.txt .
+COPY slf3s/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY raspberry/ .
+COPY slf3s/ .
 
 ENTRYPOINT ["python3", "main.py"]

@@ -258,17 +258,24 @@ class ShdlcGetContinuousMeasurementStatusBase(ShdlcCommand):
         )
 
 class ShdlcGetContinuousMeasurementStatus(ShdlcGetContinuousMeasurementStatusBase):
-    def __init__(self): 
+    def __init__(self):
+        # 0 bytes is a VALID answer: the adapter manual (§3.2.4, "Get Continuous
+        # Measurement Status") returns no data when its continuous measurement is
+        # not started — which is exactly the state the driver wants (single reader).
         super(ShdlcGetContinuousMeasurementStatus, self).__init__(
             data=[], max_response_time=0.1,
-            min_response_length=1, max_response_length=2
+            min_response_length=0, max_response_length=2
         )
 
     def interpret_response(self, data): 
         """
-        :return int: Measurement interval in ms.
+        :return int | None: Measurement interval in ms, or None when the adapter's
+                            continuous measurement is NOT running (the manual's
+                            "no data (continuous measurement not started)").
         """
-        data_bytes = bytearray(data)  
+        data_bytes = bytearray(data)
+        if len(data_bytes) < 2:
+            return None
         data_bytes = (data_bytes[0] << 8) | data_bytes[1]
         measurment_interval = int(data_bytes)
         return measurment_interval

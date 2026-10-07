@@ -1,7 +1,6 @@
 """
-data_logger.py — Improved dual CSV+binary logger for SLF3S-0600F.
+data_logger.py — Improved dual CSV+binary logger for SLF3S-0600F:
 
-Replaces dual_logger from shdlc_driver.py with:
   - Experiment metadata comment block at the top of every CSV
   - monotonic sample_index as first data column
   - COMPLETE / INTERRUPTED footer sentinel on exit
@@ -24,8 +23,7 @@ from utils import ErrorCodes
 log = logging.getLogger(__name__)
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
+# helpers:
 def _utc_now_iso() -> str:
     """Return current UTC time as an ISO 8601 string with millisecond precision."""
     return datetime.datetime.now(datetime.timezone.utc).strftime(
@@ -45,25 +43,141 @@ def _write_csv_metadata(f, metadata: dict, start_utc: str) -> None:
     Returns:
         None.
     """
-    hostname = f"raspberrypi-{metadata.get('raspberry_id', socket.gethostname())}"
-    f.write(
-        "# ── Experiment metadata ───────────────────────────────────────\n"
-        f"# configuration   : {metadata.get('configuration', 'UNKNOWN')}\n"
-        f"# configuration_name: {metadata.get('configuration_name', 'UNKNOWN')}\n"
-        f"# experiment_rep  : {metadata.get('experiment_rep', 'UNKNOWN')}\n"
-        f"# pump_lot        : {metadata.get('pump_lot', 'UNKNOWN')}\n"
-        f"# fluid           : {metadata.get('fluid', 'UNKNOWN')}\n"
-        f"# raspberry_id    : {metadata.get('raspberry_id', 'UNKNOWN')}\n"
-        f"# f_ro_hz         : {metadata.get('f_ro_hz', 'UNKNOWN')}\n"
-        f"# sampling_ms     : {metadata.get('sampling_ms', 'UNKNOWN')}\n"
-        f"# start_utc       : {start_utc}\n"
-        f"# hostname        : {hostname}\n"
-        "# ─────────────────────────────────────────────────────────────\n"
-    )
+    hostname = socket.gethostname()
+
+    # The logger's own keys, in a fixed order.
+    own = [
+        ("format_version",     core.CSV_FORMAT_VERSION),
+        ("experiment",         metadata.get("experiment", "none")),
+        ("campaign",           metadata.get("campaign", "none")),
+        ("configuration",      metadata.get("configuration", "UNKNOWN")),
+        ("configuration_name", metadata.get("configuration_name", "UNKNOWN")),
+        ("experiment_rep",     metadata.get("experiment_rep", "UNKNOWN")),
+        ("device_id",          metadata.get("device_id", "UNKNOWN")),
+        ("f_ro_hz",            metadata.get("f_ro_hz", "UNKNOWN")),
+        ("sampling_ms",        metadata.get("sampling_ms", "UNKNOWN")),
+        ("aggregate_s",        core.AGGREGATE_S),
+        ("aggregation",        "block_mean_of_non_air_readings"),
+        ("start_utc",          start_utc),
+        ("hostname",           hostname),
+        ("manifest",           metadata.get("manifest", "none")),
+        ("manifest_sha256",    metadata.get("manifest_sha256", "none")),
+        ("end_of_infusion",    metadata.get("end_of_infusion", "on")),
+    ]
+
+    fields = sorted((metadata.get("fields") or {}).items())
+
+    width = max(len(k) for k, _ in own + fields)
+    lines = ["# ── Experiment metadata ───────────────────────────────────────"]
+    lines += [f"# {k:<{width}} : {v}" for k, v in own]
+    if fields:
+        lines.append("# ── Run fields ───────────────────────────────────────────────")
+        lines += [f"# {k:<{width}} : {v}" for k, v in fields]
+    lines.append("# ─────────────────────────────────────────────────────────────")
+    f.write("\n".join(lines) + "\n")
 
 
-# ── main logger thread ────────────────────────────────────────────────────────
+# window aggregation:
+CSV_COLUMNS = (
+    "window_index,UTC_Time,Flow_ul_min,Flow_std_ul_min,Flow_min_ul_min,"
+    "Flow_max_ul_min,Volume_uL,DeviceTemperature_degC,Flag_Air,Flag_High_Flow,"
+    "N_samples,N_valid,N_air,N_high_flow,N_exp_smoothing"
+)
 
+
+class WindowAggregator:
+    """
+    Block-average raw readings into fixed windows of `window_s` seconds.
+
+    Windows are aligned to the first reading of the run. A reading belongs to the
+    window [t0 + k·W, t0 + (k+1)·W). When a reading arrives past the current
+    window, the finished window is returned as a CSV row and a new one starts at
+    the window that contains the reading — a gap in the stream leaves a gap in
+    the rows instead of an invented row.
+
+    Per window:
+      - Flow_ul_min is the mean of the readings WITHOUT the air flag. An air
+        reading reads near zero while liquid may still be moving; averaging it in
+        would bias the window low. Air readings are counted, not hidden.
+      - UTC_Time is the mean timestamp of the readings, so the value sits at the
+        centre of the data it summarises.
+      - Volume_uL is the cumulative trapezoidal integral of EVERY reading, using
+        the actual time between readings, not the nominal interval.
+    """
+
+    def __init__(self, window_s: float):
+        self.window_s = float(window_s)
+        self.t0 = None
+        self.index = None
+        self.volume_ul = 0.0
+        self._prev = None            # (timestamp, flow) of the previous reading
+        self._reset()
+
+    def _reset(self):
+        self._ts = []
+        self._valid = []
+        self._temps = []
+        self._n_air = 0
+        self._n_high = 0
+        self._n_exp = 0
+
+    def add(self, timestamp, flow_ul_min, temp_c, air, high_flow, exp_smoothing):
+        """Add one reading; return a finished row (str) or None."""
+        if self._prev is not None:
+            t_prev, q_prev = self._prev
+            self.volume_ul += 0.5 * (q_prev + flow_ul_min) * (timestamp - t_prev) / 60.0
+        self._prev = (timestamp, flow_ul_min)
+
+        if self.t0 is None:
+            self.t0 = timestamp
+            self.index = 0
+        k = int((timestamp - self.t0) // self.window_s)
+
+        row = None
+        if k != self.index and self._ts:
+            row = self._row()
+            self._reset()
+        self.index = k
+
+        self._ts.append(timestamp)
+        self._temps.append(temp_c)
+        if air:
+            self._n_air += 1
+        else:
+            self._valid.append(flow_ul_min)
+        if high_flow:
+            self._n_high += 1
+        if exp_smoothing:
+            self._n_exp += 1
+        return row
+
+    def flush(self):
+        """Return the row of the window in progress (or None) at end of run."""
+        if not self._ts:
+            return None
+        row = self._row()
+        self._reset()
+        return row
+
+    def _row(self) -> str:
+        n = len(self._ts)
+        nv = len(self._valid)
+        if nv:
+            mean = sum(self._valid) / nv
+            std = ((sum((x - mean) ** 2 for x in self._valid) / (nv - 1)) ** 0.5
+                   if nv > 1 else float("nan"))
+            lo, hi = min(self._valid), max(self._valid)
+        else:
+            mean = std = lo = hi = float("nan")
+        t_mid = sum(self._ts) / n
+        temp = sum(self._temps) / n
+        return (f"{self.index},{t_mid:.3f},{mean:.4f},{std:.4f},{lo:.4f},{hi:.4f},"
+                f"{self.volume_ul:.4f},{temp:.4f},{int(self._n_air > 0)},"
+                f"{int(self._n_high > 0)},{n},{nv},{self._n_air},{self._n_high},"
+                f"{self._n_exp}\n")
+
+
+# main logger thread: -----------------------------------------------------------------
 def dual_logger(
     csv_filename: str,
     bin_filename: str,
@@ -107,8 +221,9 @@ def dual_logger(
     configuration = metadata.get("configuration", "UNKNOWN")
     experiment_rep = metadata.get("experiment_rep", "UNKNOWN")
     start_utc = _utc_now_iso()
-    sample_index = 0
-    integrated_volume = 0.0
+    sample_index = 0            # raw readings received
+    rows_written = 0            # CSV windows written
+    aggregator = WindowAggregator(core.AGGREGATE_S)
 
     data_dir = pathlib.Path(core.DATA_DIR)
     csv_path = data_dir / csv_filename
@@ -121,13 +236,8 @@ def dual_logger(
             # Binary magic header
             f_bin.write(struct.pack(core.BIN_HEADER_FMT, core.BIN_MAGIC, core.BIN_VERSION))
 
-            # CSV metadata block
             _write_csv_metadata(f_csv, metadata, start_utc)
-            f_csv.write(
-                "sample_index,UTC_Time,Flow_ul_min,Volume_uL,"
-                "DeviceTemperature_degC,Flag_Air,Flag_High_Flow,"
-                "Exp_Smoothing,Flags_Value\n"
-            )
+            f_csv.write(CSV_COLUMNS + "\n")
 
             while not stop_event.is_set() or not queue.empty():
                 try:
@@ -140,28 +250,24 @@ def dual_logger(
                 flag_air, flag_high_flow, exp_smoothing, flags_value = (
                     core.interpret_flags_raw(flags_raw)
                 )
-                integrated_volume += (
-                    flow_ul_min * core.MIN_TO_SEC * (sampling_interval / 1000.0)
-                )
-
                 flow_raw_s = core.u16_to_i16(flow_raw)
                 temp_raw_s = core.u16_to_i16(temp_raw)
 
-                if end_of_infusion_detector.update(
+                if end_of_infusion_detector is not None and end_of_infusion_detector.update(
                     timestamp=timestamp, flow_ulmin=flow_ul_min
                 ):
                     logger.log(
                         f"End-of-infusion detected. "
-                        f"start_utc={start_utc}, volume_uL={integrated_volume:.2f}",
-                        context={"integrated_volume_uL": integrated_volume},
+                        f"start_utc={start_utc}, volume_uL={aggregator.volume_ul:.2f}",
+                        context={"integrated_volume_uL": aggregator.volume_ul},
                     )
                     stop_event.set()
 
-                f_csv.write(
-                    f"{sample_index},{timestamp},{flow_ul_min:.4f},"
-                    f"{integrated_volume:.4f},{temp_c:.4f},"
-                    f"{flag_air},{flag_high_flow},{exp_smoothing},{flags_value}\n"
-                )
+                row = aggregator.add(timestamp, flow_ul_min, temp_c,
+                                     flag_air, flag_high_flow, exp_smoothing)
+                if row is not None:
+                    f_csv.write(row)
+                    rows_written += 1
                 f_bin.write(
                     struct.pack(
                         core.BIN_RECORD_FMT,
@@ -176,6 +282,13 @@ def dual_logger(
                 if sample_index % core.FLUSH_EVERY == 0:
                     f_csv.flush()
                     f_bin.flush()
+
+            # The window in progress when the run ends is written too: it holds
+            # the last readings of the infusion.
+            row = aggregator.flush()
+            if row is not None:
+                f_csv.write(row)
+                rows_written += 1
 
     except Exception as exc:
         logger.log_error(
@@ -192,14 +305,14 @@ def dual_logger(
             with csv_path.open("a") as f:
                 f.write(
                     f"# END experiment={configuration}_{experiment_rep} "
-                    f"samples={sample_index} status={status}\n"
+                    f"samples={rows_written} raw_samples={sample_index} "
+                    f"status={status}\n"
                 )
         except Exception:
             pass
 
 
-# ── dry-run simulation ────────────────────────────────────────────────────────
-
+# dry-run simulation: --------------------------------------------------------------------
 def dry_run_communication(
     queue,
     stop_logger_event,
@@ -255,8 +368,7 @@ def dry_run_communication(
     stop_main_thread_event.set()
 
 
-# ── binary verification ───────────────────────────────────────────────────────
-
+# binary verification: ------------------------------------------------------------
 def verify_binary(bin_path) -> int:
     """
     Validate a binary log file and print a human-readable summary.

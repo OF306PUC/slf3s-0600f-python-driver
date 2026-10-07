@@ -15,23 +15,9 @@ SHDLC_SLAVE_ADDRESS = 0x00    # Default I2C slave address for the SL
 QUEUE_MAXSIZE = 1000          # Max size of the data queue
 HOURS_TO_LOG = 48             # Default logging duration in hours (Accoding to Baxter infusion pump lasting time)
 
-# ── Acquisition rate: SINGLE SOURCE OF TRUTH ──────────────────────────────────
-# The sensor's internal readout period (f_ro) and the serial polling period (f_s)
-# are LOCKED TOGETHER at this value:
-#
-#     f_ro = f_s = 10 s  (0.1 Hz)
-#
-# They must not diverge. If polling were faster than the readout, consecutive
-# polls would return the SAME internal measurement while the CSV metadata field
-# `f_ro_hz` — derived from the polling interval — would claim a rate the sensor
-# never produced. The recorded metadata would then be silently wrong, which is
-# the worst outcome for multi-day runs nobody re-observes.
-#
-# Enforcement: `shdlc_driver` configures the sensor FROM this same value (so they
-# agree by construction), and `main.py` rejects a `--sampling-ms` that differs.
-# To change the project's acquisition rate, change it HERE and nowhere else —
-# and it must be one of SHDLC_SUPPORTED_INTERVALS_MS below.
-SAMPLING_INTERVAL = 10000     # ms — f_ro = f_s = 10 s (0.1 Hz)
+# Acquisition rate: 
+SAMPLING_INTERVAL = 20        # ms — f_ro = f_s = 20 ms (50 Hz): datasheet's recommended 50–200 Hz
+AGGREGATE_S = 60
 
 # Discrete measurement intervals the SLF3S-0600F accepts over SHDLC.
 SHDLC_SUPPORTED_INTERVALS_MS = (20, 50, 100, 1000, 10000, 60000)
@@ -49,7 +35,10 @@ UL_MIN_TO_ML_SEC = (1.0 / 1000.0 / 60.0)
 MIN_TO_SEC = (1.0 / 60.0)
 
 # End of infusion detector params:
-EoI_WINDOW_SIZE = 100                # Number of samples in the sliding window
+# The window is defined in SECONDS so it keeps the time span it had when it was
+# tuned (100 samples × 10 s = 1000 s) regardless of the readout rate.
+EoI_WINDOW_S = 1000
+EoI_WINDOW_SIZE = int(EoI_WINDOW_S * 1000 // SAMPLING_INTERVAL)  # samples
 EoI_HOLD_SEC = 300                   # Hold time in seconds (5 min.)
 EoI_RMS_FLOW_ULMIN_THRESHOLD = 0.09  # uL/min (Empirical threshold for RMS flow rate to consider "near zero" flow)
 
@@ -62,37 +51,19 @@ BIN_RECORD_FMT = ">dhhH"
 BIN_RECORD_SIZE = struct.calcsize(BIN_RECORD_FMT)   # 14 bytes per record
 
 # Binary file magic header: 12-byte magic string + 4-byte version uint32 = 16 bytes
+# Version of the CSV header + column layout this logger writes. Bumped whenever a
+# reader could misinterpret a file written by a newer logger: a renamed column, a
+# removed metadata key, a changed unit. Adding a NEW metadata line does not require
+# a bump, because a reader that ignores unknown keys is unaffected.
+CSV_FORMAT_VERSION = 2
+
 BIN_MAGIC = b'SLF3SLOG\x00\x00\x00\x01'             # 12-byte magic
 BIN_VERSION = 1                                       # uint32
 BIN_HEADER_FMT = '>12sI'
 BIN_HEADER_SIZE = struct.calcsize(BIN_HEADER_FMT)    # 16 bytes
 
 # Flushing period for logger
-FLUSH_EVERY = 10 # samples
-
-# ── The experiment matrix: EXACTLY these 8 conditions ─────────────────────────
-# Catheter configuration codes → descriptive names. This dict is the canonical
-# list of the study's conditions: `main.py` REJECTS a --configuration that is not
-# a key here, so a run cannot be launched under an ad-hoc label.
-#
-# Why the rejection matters: the first campaign produced three runs launched as
-# `C1` and renamed to `C1a_*` by hand afterwards. Their in-file metadata still
-# says `configuration: C1`, so any analysis that groups by the recorded metadata
-# groups them wrong — and the files LOOK correct in a directory listing. The
-# validation makes that class of error impossible at the source.
-#
-# The `a`/`b` suffix denotes pump reuse (a = first use, b = second use), so the
-# same catheter type can be compared against itself as the pump degrades.
-CONFIG_NAMES = {
-    "C0a": "Sin catéter — bomba primera vez",
-    "C0b": "Sin catéter — bomba segunda vez",
-    "C0c": "Sin catéter — solución con bupivacaína (NaCl 240 mL + BuPi 60 mL)",
-    "C1a": "Contiplex 40 cm (3 orificios laterales) — bomba primera vez",
-    "C1b": "Contiplex 40 cm (3 orificios laterales) — bomba segunda vez",
-    "C2":  "Contiplex 40 cm + filtro Perifix 0,2 µm",
-    "C3":  "Contiplex 100 cm (3 orificios laterales)",
-    "C4":  "Catéter peridural pediátrico (orificio terminal)",
-}
+FLUSH_EVERY = 250 # raw samples (5 s at 50 Hz)
 
 
 def measurement_interval_bytes(interval_ms):

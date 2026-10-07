@@ -55,41 +55,52 @@ class Logger:
                 f.write(f"    CONTEXT: {context}\n")
 
 
-class EndOfInfusionDetector: 
-    def __init__(self, window_size=100, hold_sec=60, 
+class EndOfInfusionDetector:
+    """
+    Flags the end of an infusion: the RMS of the flow over a sliding window stays
+    below a threshold for `hold_sec`.
+
+    The sum of squares is kept as a running total so each update is O(1). That
+    matters at 10 Hz: the window spans 1000 s, i.e. 10 000 readings, and summing
+    them on every reading would cost ~10^5 operations per second for nothing.
+    """
+    def __init__(self, window_size=100, hold_sec=60,
                  rms_flow_ulmin_threshold=0.05):
         self._window_size = int(window_size)
         self._hold_sec = float(hold_sec)
         self._rms_threshold = float(rms_flow_ulmin_threshold)
 
-        self._flow_buffer = deque(maxlen=window_size)
+        self._flow_buffer = deque()
+        self._sum_sq = 0.0
         self._last_non_zero_time = None
 
-    def update(self, timestamp, flow_ulmin) -> bool: 
+    def update(self, timestamp, flow_ulmin) -> bool:
         """
         Returns True if end-of-infusion is detected.
-        
+
         :param flow_ulmin: Current flow in uL/min.
         """
-        self._flow_buffer.append(float(flow_ulmin))
+        f = float(flow_ulmin)
+        self._flow_buffer.append(f)
+        self._sum_sq += f * f
+        if len(self._flow_buffer) > self._window_size:
+            old = self._flow_buffer.popleft()
+            self._sum_sq -= old * old
 
         if len(self._flow_buffer) < self._window_size:
             self._last_non_zero_time = None
             return False
-        
-        rms = (sum(f**2 for f in self._flow_buffer) / len(self._flow_buffer)) ** 0.5
+
+        # max(…, 0): the running subtraction can leave a tiny negative residue.
+        rms = (max(self._sum_sq, 0.0) / len(self._flow_buffer)) ** 0.5
         near_zero = (rms < self._rms_threshold)
 
-        if near_zero: 
+        if near_zero:
             if self._last_non_zero_time is None:
                 self._last_non_zero_time = timestamp
             elif (timestamp - self._last_non_zero_time) >= self._hold_sec:
                 return True
-            
         else:
             self._last_non_zero_time = None
 
         return False
-
-        
-        

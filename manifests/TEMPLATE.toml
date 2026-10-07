@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Experiment manifest — TEMPLATE
+#
+# One file = one campaign of one experiment. Copy this file, rename it
+# <experiment-id>-c<campaign>.toml, and fill it in. The logger reads it with
+#   --manifest manifests/<file>.toml
+# refuses any run that does not fit it, and records the file name and its
+# SHA-256 in every data file it writes — so each measurement can be traced back
+# to the exact vocabulary it was launched under.
+#
+# Nothing study-specific belongs in the driver. If you are about to edit a .py
+# file to add a condition, write it here instead.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Format version of this file. Leave at 1.
+schema = 1
+
+[experiment]
+# Stable, lowercase identifier shared by every campaign of the same study.
+id = "my-experiment"
+# Campaign: a positive number (1, 2, …) or a lowercase name ("main",
+# "pilot", …). A new campaign gets a new file, never an edit of an old one:
+# codes may be reused with a different meaning across campaigns, and only the
+# pair (experiment, campaign) disambiguates them.
+campaign = 1
+title = "Short human-readable description"
+# "open"   — runs may still be acquired under this manifest.
+# "closed" — the campaign is finished; the logger refuses new runs. Keep the
+#            file: the analysis still needs its vocabulary to read the data.
+status = "open"
+
+# Condition code -> what it physically is. Codes are free-form but must be
+# stable for the life of the campaign. The description is copied into each
+# file's header, so it should read well on its own.
+[conditions]
+A = "Description of condition A"
+B = "Description of condition B"
+
+# Optional: planned replicates per condition. Used for planning and to report
+# which replicates were never performed. Not an upper bound — a failed run may
+# be repeated.
+[replicates]
+A = 3
+B = 3
+
+[fields]
+# Per-run fields the operator MUST supply (--meta name=value). A value that is
+# empty or a placeholder (UNKNOWN, TBD, n/a, …) counts as missing.
+required = ["batch", "session", "instrument"]
+
+# Values recorded when the operator does not supply one.
+[fields.defaults]
+fluid = "water"
+
+# Optional: a regular expression each field's value must fully match. This is
+# the general guard against a placeholder that LOOKS real (e.g. LOT-XXXX).
+[fields.patterns]
+batch = "^B[0-9]{2}$"
+
+# ── Optional: design rules ───────────────────────────────────────────────────
+# Checked against [plan] when the manifest loads, so an edit that breaks the
+# design is caught before any run instead of being discovered in the analysis.
+[constraints]
+# Each condition's planned runs must use at least two values of each field —
+# a condition measured with a single batch (or sensor, or lot) cannot be
+# separated from it.
+vary_within_condition = ["batch"]
+# No two planned runs may share these values (e.g. one instrument cannot run
+# two things at once).
+unique_together = [["session", "instrument"]]
+
+# ── Optional: run plan ───────────────────────────────────────────────────────
+# What each (condition, replicate) must be launched with. A planned run launched
+# with any other value is rejected. An unplanned replicate of a planned
+# condition is a REPLACEMENT: it must pass --meta replaces=rep_N and keep that
+# run's values for every planned field except `tanda`.
+# Every field used here must be declared in [fields].
+[plan.A]
+rep_1 = { session = "S1", instrument = "I1", batch = "B01" }
+rep_2 = { session = "S2", instrument = "I2", batch = "B02" }
+rep_3 = { session = "S3", instrument = "I1", batch = "B01" }
+
+[plan.B]
+rep_1 = { session = "S1", instrument = "I2", batch = "B02" }
+rep_2 = { session = "S2", instrument = "I1", batch = "B01" }
+rep_3 = { session = "S3", instrument = "I2", batch = "B02" }

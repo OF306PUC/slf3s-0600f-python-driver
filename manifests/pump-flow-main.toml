@@ -1,0 +1,113 @@
+# Elastomeric pump flow study — campaign "main": catheter geometry. This is
+# the definitive campaign. Campaign 1 was preliminary experimentation; none of its
+# replicates is part of this one.
+#
+# Every condition uses a FIRST-USE pump. ⚠ Codes C2 and C3 meant DIFFERENT
+# catheters in campaign 1; only (experiment, campaign, code) identifies a run.
+#
+# Bench: 4 sensors (SEN1–SEN4) measured in parallel. One "tanda" = 4 simultaneous
+# runs, ONE OF EACH CONDITION — a complete block, so room temperature, operator and
+# date act identically on all four catheters. 28 runs = 7 tandas × 4.
+
+schema = 1
+
+[experiment]
+id = "pump-flow"
+campaign = "main"
+title = "Elastomeric infusion pump — effect of catheter geometry on delivered flow"
+status = "open"
+
+[conditions]
+C0 = "Sin catéter"
+C1 = "Contiplex 40 cm (3 orificios laterales)"
+C2 = "Contiplex 100 cm (3 orificios laterales)"
+C3 = "Catéter peridural pediátrico (orificio terminal)"
+
+[replicates]
+C0 = 7
+C1 = 7
+C2 = 7
+C3 = 7
+
+[fields]
+# The three blocking factors of the design. All three are recorded in every file
+# so the analysis can estimate them instead of having them confounded with the
+# catheter, which is what happened in campaign 1.
+required = ["pump_lot", "sensor", "tanda"]
+
+[fields.defaults]
+fluid = "NaCl_300mL"
+
+[fields.patterns]
+# Pumps are labelled physically with their lot; only three lots exist.
+pump_lot = "^LOT[ABC]$"
+# Physical sensor label. Each sensor has its own systematic error (up to ±5 % of
+# reading per the datasheet), so the sensor is a factor, not a detail.
+sensor = "^SEN[1-4]$"
+# T01–T07 are planned; T08+ are for replacement runs.
+tanda = "^T[0-9]{2}$"
+
+[constraints]
+# Methodology rule: no catheter configuration may be measured with a single lot —
+# or with a single sensor. Checked against the plan below when this file loads.
+vary_within_condition = ["pump_lot", "sensor"]
+# A sensor runs one experiment at a time.
+unique_together = [["tanda", "sensor"]]
+
+# ── Run plan ─────────────────────────────────────────────────────────────────
+# The driver rejects a planned run launched with any other tanda, sensor or lot.
+# A failed run is replaced by a NEW replicate (rep_8, …) launched with
+#   --meta replaces=rep_N
+# which must keep the replaced run's sensor and lot (any tanda, T08+).
+#
+# Properties of this plan (verified when it was generated, 2026-10-05):
+#   - every tanda holds all 4 conditions and all 3 lots
+#   - every condition uses all 3 lots (3/2/2) and all 4 sensors (2/2/2/1)
+#   - T01–T04 form a Latin square: each condition on each sensor exactly once
+#   - every lot×sensor pair occurs 2 or 3 times (lot and sensor not confounded)
+#   - lot usage 10/9/9 of 12/12/12 → 8 pumps left for replacements
+#
+#  tanda   SEN1        SEN2        SEN3        SEN4
+#  T01    C0·LOTB     C1·LOTC     C2·LOTC     C3·LOTA   
+#  T02    C3·LOTA     C0·LOTB     C1·LOTB     C2·LOTC   
+#  T03    C2·LOTA     C3·LOTB     C0·LOTC     C1·LOTB   
+#  T04    C1·LOTA     C2·LOTC     C3·LOTB     C0·LOTC   
+#  T05    C2·LOTB     C3·LOTC     C1·LOTA     C0·LOTA   
+#  T06    C3·LOTC     C0·LOTA     C2·LOTB     C1·LOTA   
+#  T07    C1·LOTC     C2·LOTA     C0·LOTA     C3·LOTB   
+
+[plan.C0]
+rep_1 = { tanda = "T01", sensor = "SEN1", pump_lot = "LOTB" }
+rep_2 = { tanda = "T02", sensor = "SEN2", pump_lot = "LOTB" }
+rep_3 = { tanda = "T03", sensor = "SEN3", pump_lot = "LOTC" }
+rep_4 = { tanda = "T04", sensor = "SEN4", pump_lot = "LOTC" }
+rep_5 = { tanda = "T05", sensor = "SEN4", pump_lot = "LOTA" }
+rep_6 = { tanda = "T06", sensor = "SEN2", pump_lot = "LOTA" }
+rep_7 = { tanda = "T07", sensor = "SEN3", pump_lot = "LOTA" }
+
+[plan.C1]
+rep_1 = { tanda = "T01", sensor = "SEN2", pump_lot = "LOTC" }
+rep_2 = { tanda = "T02", sensor = "SEN3", pump_lot = "LOTB" }
+rep_3 = { tanda = "T03", sensor = "SEN4", pump_lot = "LOTB" }
+rep_4 = { tanda = "T04", sensor = "SEN1", pump_lot = "LOTA" }
+rep_5 = { tanda = "T05", sensor = "SEN3", pump_lot = "LOTA" }
+rep_6 = { tanda = "T06", sensor = "SEN4", pump_lot = "LOTA" }
+rep_7 = { tanda = "T07", sensor = "SEN1", pump_lot = "LOTC" }
+
+[plan.C2]
+rep_1 = { tanda = "T01", sensor = "SEN3", pump_lot = "LOTC" }
+rep_2 = { tanda = "T02", sensor = "SEN4", pump_lot = "LOTC" }
+rep_3 = { tanda = "T03", sensor = "SEN1", pump_lot = "LOTA" }
+rep_4 = { tanda = "T04", sensor = "SEN2", pump_lot = "LOTC" }
+rep_5 = { tanda = "T05", sensor = "SEN1", pump_lot = "LOTB" }
+rep_6 = { tanda = "T06", sensor = "SEN3", pump_lot = "LOTB" }
+rep_7 = { tanda = "T07", sensor = "SEN2", pump_lot = "LOTA" }
+
+[plan.C3]
+rep_1 = { tanda = "T01", sensor = "SEN4", pump_lot = "LOTA" }
+rep_2 = { tanda = "T02", sensor = "SEN1", pump_lot = "LOTA" }
+rep_3 = { tanda = "T03", sensor = "SEN2", pump_lot = "LOTB" }
+rep_4 = { tanda = "T04", sensor = "SEN3", pump_lot = "LOTB" }
+rep_5 = { tanda = "T05", sensor = "SEN2", pump_lot = "LOTC" }
+rep_6 = { tanda = "T06", sensor = "SEN1", pump_lot = "LOTC" }
+rep_7 = { tanda = "T07", sensor = "SEN4", pump_lot = "LOTB" }

@@ -10,11 +10,11 @@ __pycache__/
 data/
 logs/
 
-# Same outputs when main.py runs directly from raspberry/ instead of in Docker:
+# Same outputs when main.py runs directly from slf3s/ instead of in Docker:
 # core.py writes to Temp/ and Logs/ relative to the cwd. Capitalised, so the
 # lowercase patterns above do not cover them on a case-sensitive filesystem.
-raspberry/Temp/
-raspberry/Logs/
+slf3s/Temp/
+slf3s/Logs/
 
 # Analysis outputs
 results/

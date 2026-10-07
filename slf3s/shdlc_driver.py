@@ -59,38 +59,45 @@ def _run_communication(
             log.warning("Stop command returned error state: %s", error)
         time.sleep(1)
 
-        # I2C Transceive command to start continuous measurement.
-        # The sensor's readout period is derived from the SAME sampling_interval
-        # used to poll it below, so f_ro = f_s holds by construction rather than by
-        # two literals agreeing (see core.SAMPLING_INTERVAL).
-        i2c_transceive_start_cmd = ShdlcStartContinuousMeasurement(
-            measurement_interval=core.measurement_interval_bytes(sampling_interval),
-            i2c_medium_command=ShdlcStartContinuousMeasurement._I2C_MEAS_CMD_MEDIUM_WATER
+        # Start the SENSOR's own continuous measurement over a plain I2C write,
+        # and NOT the adapter's continuous measurement (SHDLC 0x33).
+        i2c_start_cmd = ShdlcCmdI2cTransceive(
+            i2c_addr=ShdlcCmdI2cTransceive._I2C_ADDRESS,
+            i2c_timeout=ShdlcCmdI2cTransceive._I2C_TIMEOUT_MS,
+            tx_data=ShdlcCmdI2cTransceive._MEDIUM_WATER,   # 0x3608: water calibration
+            rx_length=0,                                    # write only; waits 60 ms warm-up
+            max_response_time=0.1,
         )
-        _, error  = interface.execute(slave_address, i2c_transceive_start_cmd)
+        _, error = interface.execute(slave_address, i2c_start_cmd)
         log.info(
-            "(2) Starting continuous measurement (f_ro = f_s = %d ms)",
-            sampling_interval,
+            "(2) Sensor continuous measurement started over I2C (single reader, "
+            "f_ro = f_s = %d ms)", sampling_interval,
         )
         if error:
             log.warning("Start command returned error state: %s", error)
         time.sleep(1)
 
-        # I2C Transceive command to check continuous measurement status
+        # I2C Transceive command to check continuous measurement status:
         i2c_transceive_status_cmd = ShdlcGetContinuousMeasurementStatus()
         status_data, error  = interface.execute(slave_address, i2c_transceive_status_cmd)
-        log.info("(3) Measurement status — interval: %s ms", status_data)
+        if status_data is None:
+            log.info("(3) Adapter continuous measurement: OFF — single reader (correct)")
+        else:
+            log.warning(
+                "(3) Adapter continuous measurement is ACTIVE (interval %s ms): the "
+                "sensor has two readers and readings will NOT cover their interval",
+                status_data,
+            )
         if error:
             log.warning("Status command returned error state: %s", error)
         time.sleep(1)
 
         # Read measurement data in a loop
-        i2c_header = (ShdlcCmdI2cTransceive._I2C_ADDRESS << 1) | \
-                ShdlcCmdI2cTransceive._READ_BIT 
+        # Read-only transaction: the adapter builds the I2C address/read header
         transceive_cmd = ShdlcCmdI2cTransceive(
             i2c_addr=ShdlcCmdI2cTransceive._I2C_ADDRESS,
             i2c_timeout=ShdlcCmdI2cTransceive._I2C_TIMEOUT_MS,
-            tx_data=[i2c_header],       # Read measurement command
+            tx_data=[],                 # nothing to write: read header only
             rx_length=9,                # 9 bytes max for SLF3S-0600F sensor
             max_response_time=0.1
         )  
@@ -194,6 +201,18 @@ def _run_communication(
             )
 
         finally:
+            # Stop the sensor's own measurement (I2C 0x3FF9), then make sure the
+            # adapter is idle as well.
+            try:
+                interface.execute(slave_address, ShdlcCmdI2cTransceive(
+                    i2c_addr=ShdlcCmdI2cTransceive._I2C_ADDRESS,
+                    i2c_timeout=ShdlcCmdI2cTransceive._I2C_TIMEOUT_MS,
+                    tx_data=ShdlcCmdI2cTransceive._STOP_CODE,
+                    rx_length=0,
+                    max_response_time=0.1,
+                ))
+            except Exception as exc:
+                log.warning("Sensor I2C stop (shutdown) failed: %s", exc)
             _, error  = interface.execute(slave_address, i2c_transceive_stop_cmd)
             log.info("Stopping continuous measurement (shutdown)")
             if error:
