@@ -63,3 +63,21 @@ def load_csv(csv_path: pathlib.Path) -> pd.DataFrame:
     df.dropna(subset=["UTC_Time", "Flow_ul_min"], inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
+
+
+def device_id(metadata: dict, dash: str = "—") -> str:
+    """
+    The logging host's identifier, across both header schemas.
+
+    The logger wrote `raspberry_id` before it was versioned, and writes `device_id`
+    from format version 1 on — the rename came with dropping the Raspberry-Pi-specific
+    framing, since the driver is a generic Linux logger. Campaign 1's files are all
+    pre-version, so both spellings are live data and will stay that way: those files
+    are acquired and are not going to be rewritten.
+
+    Resolved here rather than at each call site so the fallback cannot be
+    half-applied — one reader honouring it and another not is exactly how a column
+    ends up empty for half a table with no error anywhere.
+    """
+    value = metadata.get("device_id") or metadata.get("raspberry_id")
+    return value if value else dash

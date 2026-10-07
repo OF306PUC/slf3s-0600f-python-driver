@@ -13,8 +13,11 @@ import pathlib
 
 import numpy as np
 
+import csv_io
+
 from config import (
-    EXPECTED_REPLICATES, MA_WINDOW_MIN, NOM_FLOW_CORR_ML_HR, NOM_FLOW_ML_HR,
+    EXPECTED_REPLICATES, FOCUS_CONDITIONS, MA_WINDOW_MIN, NOM_FLOW_CORR_ML_HR,
+    NOM_FLOW_ML_HR,
     NACL_FACTOR, SENSOR_IIR_ALPHA, STUDY_CONDITIONS, T_OP_DECLARED_C,
     TEFF_FRAC_OF_NOMINAL, description_for, methodology_provenance,
 )
@@ -187,13 +190,13 @@ def _configuration_section(runs: list) -> list:
             description_for(r["condition"]),
             m.get("pump_lot", "—"),
             m.get("fluid", "—"),
-            m.get("raspberry_id", "—"),
+            csv_io.device_id(m),
             m.get("sampling_ms", "—"),
             m.get("f_ro_hz", "—"),
             start[:10] if start != "—" else "—",
         ])
     lines.append(_md_table(
-        ["run", "code", "catheter configuration", "pump lot", "fluid", "Pi",
+        ["run", "code", "catheter configuration", "pump lot", "fluid", "device",
          "sampling (ms)", "f_ro (Hz)", "start (UTC)"],
         rows, ["l", "l", "l", "l", "l", "r", "r", "r", "l"],
     ))
@@ -297,6 +300,100 @@ def _pipeline_section(params: dict, runs: list) -> list:
     return lines
 
 
+def _focus_section(runs: list, curves: dict, params: dict) -> list:
+    """
+    The four first-use conditions on their own, ahead of the full campaign.
+
+    A separate section rather than a highlighted row in the per-condition table:
+    these four answer ONE question — how catheter geometry alone changes delivered
+    flow — and the other four each change a second variable (pump reuse, an added
+    filter, a different fluid). Reading them from the same table invites comparing
+    across two variables at once, which is precisely the mistake this section
+    exists to prevent.
+    """
+    fmt = params["plot_format"]
+    members = {c: [r for r in runs if r["condition"] == c] for c in FOCUS_CONDITIONS}
+    present = [c for c in FOCUS_CONDITIONS if members[c]]
+
+    lines = [
+        "## Focus conditions — catheter geometry",
+        "",
+        "The four conditions run with a **first-use pump**, which together isolate "
+        "a single variable: the catheter in line. `C0a` is the no-catheter "
+        "baseline and the other three are the geometries measured against it.",
+        "",
+        f"- Conditions: **{', '.join(FOCUS_CONDITIONS)}**",
+        f"- Runs in this set: **{sum(len(m) for m in members.values())}** of "
+        f"{len(runs)} analysed",
+        f"- Figures: `focus_replicate_matrix.{fmt}` (one panel per run) and "
+        f"`focus_condition_means.{fmt}` (the condition means overlaid)",
+        "",
+        "Excluded from this view, each because it moves a second variable: `C0b` "
+        "and `C1b` reuse a pump, `C2` adds a 0.2 µm filter to the `C1a` catheter, "
+        "and `C0c` changes the fluid. They remain in every other section.",
+        "",
+    ]
+
+    # Per condition: the same quantities as the full table, plus mean delivered
+    # flow — V/T_eff is what a catheter geometry is expected to move, and it is
+    # the one number that makes the four directly comparable at a glance.
+    rows = []
+    for cond in FOCUS_CONDITIONS:
+        m = members[cond]
+        expected = EXPECTED_REPLICATES.get(cond, 0)
+        if not m:
+            rows.append([cond, description_for(cond), f"0 / {expected}"]
+                        + ["—"] * 4)
+            continue
+        v = [r["stats"]["volume"]["V_dispensed_mL"] for r in m]
+        te = [r["stats"]["teff"]["T_eff_h"] for r in m
+              if r["stats"]["teff"]["T_eff_h"] is not None]
+        q = [r["stats"]["volume"]["V_dispensed_mL"] / r["stats"]["teff"]["T_eff_h"]
+             for r in m if r["stats"]["teff"]["T_eff_h"]]
+        rows.append([
+            cond, description_for(cond), f"{len(m)} / {expected}",
+            f"{np.mean(v):.1f}" + (f" ± {np.std(v, ddof=1):.1f}" if len(v) > 1 else ""),
+            f"{np.mean(te):.1f}" if te else "—",
+            f"{np.mean(q):.2f}" + (f" ± {np.std(q, ddof=1):.2f}"
+                                   if len(q) > 1 else "") if q else "—",
+            f"{np.std(v, ddof=1) / np.sqrt(len(v)):.2f}" if len(v) > 1 else "—",
+        ])
+    lines.append(_md_table(
+        ["code", "catheter configuration", "reps", "V_disp mean ± SD (mL)",
+         "T_eff mean (h)", "mean flow V/T_eff (mL/hr)", "SE of V (mL)"],
+        rows, ["l", "l", "r", "r", "r", "r", "r"],
+    ))
+
+    lines += ["", "### Runs in the focus set", ""]
+    rows = []
+    for cond in present:
+        for r in sorted(members[cond], key=lambda x: x["experiment_name"]):
+            st = r["stats"]
+            te = st["teff"]["T_eff_h"]
+            v = st["volume"]["V_dispensed_mL"]
+            rows.append([
+                st["experiment_name"], cond,
+                _n(te, "{:.1f}"), _n(v, "{:.1f}"),
+                _n(v / te if te else None, "{:.2f}"),
+                _n(st["noise"].get("residual_rms_ul_min"), "{:.2f}"),
+                _n(st["air"]["fraction_total"] * 100.0, "{:.1f}"),
+                st["metadata"].get("pump_lot") or "—",
+            ])
+    lines.append(_md_table(
+        ["run", "cond.", "T_eff (h)", "V_disp (mL)", "V/T_eff (mL/hr)",
+         "noise RMS (µL/min)", "air (%)", "pump lot"],
+        rows, ["l", "l"] + ["r"] * 5 + ["l"],
+    ))
+    lines += [
+        "",
+        "`pump lot` is carried in this table on purpose: condition and "
+        "manufacturing lot are confounded across the campaign, so any difference "
+        "read from this section must be checked against it before it is "
+        "attributed to the catheter.",
+    ]
+    return lines
+
+
 def write_summary_report(runs: list, incomplete: list, not_performed: list,
                          curves: dict, params: dict,
                          out_dir: pathlib.Path) -> pathlib.Path:
@@ -338,6 +435,10 @@ def write_summary_report(runs: list, incomplete: list, not_performed: list,
     lines += _pipeline_section(params, runs)
     lines += ["", ""]
     lines += _configuration_section(runs)
+    lines += ["", ""]
+
+    # ── focus set, ahead of the full campaign ─────────────────────────────────
+    lines += _focus_section(runs, curves, params)
     lines += ["", ""]
 
     # ── results ───────────────────────────────────────────────────────────────

@@ -12,12 +12,63 @@ data never appear here; they are computed per run in stats.py.
 """
 
 
-# The 8 conditions of the study, mirroring raspberry/core.py CONFIG_NAMES. Kept as
+# ── Campaigns ────────────────────────────────────────────────────────────────
+# A condition code does NOT identify a run on its own: campaigns 1 and 2 reuse the
+# labels `C2` and `C3` for DIFFERENT catheters.
+#
+#     code | campaign 1                        | campaign 2
+#     C2   | Contiplex 40 cm + 0.2 um filter    | Contiplex 100 cm
+#     C3   | Contiplex 100 cm                   | paediatric catheter
+#
+# Both the raw data (`Temp/campana-N/`) and the results (`results/campana-N/`) are
+# therefore separated by campaign, and so are the tables below. Without that
+# separation two different catheters would share an output directory and be
+# averaged into one condition — silently, because nothing about it is an error.
+#
+# The driver no longer carries campaign 1 at all: its data is acquired and it will
+# never launch one of those runs again. The analysis keeps it, because it reads it.
+# Campaign identifiers as they appear in directory names (Temp/campana-<id>/).
+# "1" is the preliminary campaign; "main" is the definitive one.
+CAMPAIGNS = ("1", "main")
+DEFAULT_CAMPAIGN = "main"
+
+# Campaign "main" — the catheter-geometry study. All first-use pumps, so no a/b suffix.
+# DUPLICATES manifests/pump-flow-main.toml, temporarily: the analysis should load
+# the manifest itself so the vocabulary has one home for both sides (B-023).
+CONDITIONS_C2 = {
+    "C0": "Sin catéter",
+    "C1": "Contiplex 40 cm (3 orificios laterales)",
+    "C2": "Contiplex 100 cm (3 orificios laterales)",
+    "C3": "Catéter peridural pediátrico (orificio terminal)",
+}
+EXPECTED_REPLICATES_C2 = {"C0": 7, "C1": 7, "C2": 7, "C3": 7}
+
+# The 8 conditions of the study, mirroring the driver's condition table. Kept as
 # a literal because experimental_analysis/ runs on a workstation and must not
-# import from the Pi-side driver package (raspberry/ is deliberately standalone).
+# import from the driver package (slf3s/ is deliberately standalone).
 # If a condition is added there, add it here too.
 STUDY_CONDITIONS = (
     "C0a", "C0b", "C0c", "C1a", "C1b", "C2", "C3", "C4",
+)
+
+# The subset the study reports on first: the four FIRST-USE conditions, which
+# together isolate one question — how the catheter geometry alone changes the
+# delivered flow. C0a is the no-catheter baseline; C1a, C3 and C4 are the three
+# catheter geometries measured against it.
+#
+# The other four are excluded for reasons, not by omission: C0b and C1b are
+# second-use pumps (a different question — pump reuse), C2 adds a filter on top of
+# the C1a catheter (so it answers the filter question, not the geometry one), and
+# C0c uses a different fluid. Keeping them out of this view is what makes the
+# comparison a clean one-variable contrast.
+#
+# Membership must stay a subset of STUDY_CONDITIONS; see the guard below.
+FOCUS_CONDITIONS = (
+    "C0a", "C1a", "C3", "C4",
+)
+
+assert set(FOCUS_CONDITIONS) <= set(STUDY_CONDITIONS), (
+    "FOCUS_CONDITIONS must be a subset of STUDY_CONDITIONS"
 )
 
 # Replicates the protocol calls for, per condition. `C0c` is a single run by
@@ -30,7 +81,7 @@ EXPECTED_REPLICATES = {
 }
 
 # What each condition code actually IS — the catheter, filter and pump reuse in
-# line. Mirrors raspberry/core.py CONFIG_NAMES, a literal for the same reason
+# line. Mirrors the driver's condition table, a literal for the same reason
 # STUDY_CONDITIONS is.
 #
 # This is the authoritative source for the analysis side, NOT the

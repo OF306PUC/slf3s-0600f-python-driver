@@ -234,7 +234,8 @@ def _tex_escape(s: str) -> str:
 
 
 def plot_replicate_matrix(runs: list, out_dir: pathlib.Path, ma_window_min: float,
-                          ncols: int = 3) -> None:
+                          ncols: int = 3,
+                          stem: str = "comparison_replicate_matrix") -> None:
     """
     Every replicate's flow profile as small multiples — raw and filtered only.
 
@@ -331,10 +332,11 @@ def plot_replicate_matrix(runs: list, out_dir: pathlib.Path, ma_window_min: floa
     fig.legend(handles=handles, loc="upper center", ncol=len(handles), fontsize=9,
                bbox_to_anchor=(0.5, 1.0), borderaxespad=0.0)
     fig.tight_layout(rect=(0, 0, 1, 0.965))
-    _save_fig(fig, str(out_dir / "comparison_replicate_matrix"))
+    _save_fig(fig, str(out_dir / stem))
 
 
-def plot_condition_overlay(curves: dict, out_dir: pathlib.Path) -> None:
+def plot_condition_overlay(curves: dict, out_dir: pathlib.Path,
+                           stem: str = "comparison_condition_means") -> None:
     """All condition-mean flow profiles on one axis, fixed colour per condition."""
     fig, ax = utils_mpl.get_fig(size=(11.0, 5.0), dpi=150)
     ax.axhline(NOM_FLOW_ML_HR, color=INK_PRIMARY, lw=0.9, ls="--",
@@ -353,4 +355,4 @@ def plot_condition_overlay(curves: dict, out_dir: pathlib.Path) -> None:
     _finish(fig, ax, r"Time since infusion onset (hours)",
             r"$\bar{q}(t)$ (mL/hr)", (0.0, t_max), (min(-0.5, 0.0), y_hi),
             legend_loc="upper right")
-    _save_fig(fig, str(out_dir / "comparison_condition_means"))
+    _save_fig(fig, str(out_dir / stem))

@@ -26,7 +26,9 @@ plotting, no formatting. Each step belongs to one module:
 Outputs, per run: three curves (flow, temperature, volume) + stats.json.
 Outputs, per condition: the same three curves averaged across its replicates.
 Plus a cross-condition overlay, a replicate matrix (every run's raw + filtered flow
-as small multiples), and summary.md.
+as small multiples), the same two figures restricted to the focus conditions
+(config.FOCUS_CONDITIONS — the first-use set that isolates catheter geometry),
+and summary.md.
 
 Runs whose acquisition did not finish cleanly, that never reach an infusion onset,
 or that never reach the end of infusion produce NO figures and NO stats: they are
@@ -40,7 +42,9 @@ import aggregate
 import figures
 import pipeline
 import report
-from config import EXPECTED_REPLICATES, MA_WINDOW_MIN, OFFSET_WINDOW_H, STUDY_CONDITIONS, colour_for
+from config import (CAMPAIGNS, DEFAULT_CAMPAIGN, EXPECTED_REPLICATES,
+                    FOCUS_CONDITIONS, MA_WINDOW_MIN, OFFSET_WINDOW_H,
+                    STUDY_CONDITIONS, colour_for)
 from figures import DEFAULT_DPI
 
 
@@ -50,8 +54,15 @@ def parse_args():
     )
     parser.add_argument("csv_files", nargs="*",
         help="One or more {CONFIG}_{REP}.csv paths (default: all study-condition CSVs in Temp/C*/)")
-    parser.add_argument("--output-dir", default="results/",
-        help="Root output directory (default: results/)")
+    parser.add_argument("--campaign", type=str, default=DEFAULT_CAMPAIGN,
+        choices=CAMPAIGNS,
+        help=f"Which campaign to analyse (default: {DEFAULT_CAMPAIGN}). Selects\n"
+             f"both the input tree (Temp/campana-N/) and, unless --output-dir\n"
+             f"says otherwise, the output tree (results/campana-N/). Campaigns are\n"
+             f"kept apart because they reuse the codes C2 and C3 for different\n"
+             f"catheters, so one results/ tree would merge two of them.")
+    parser.add_argument("--output-dir", default=None,
+        help="Root output directory (default: results/campana-<campaign>/)")
     parser.add_argument("--offset-window-h", type=float, default=OFFSET_WINDOW_H,
         help=f"Hours from logging start used to measure the zero-flow offset "
              f"(default: {OFFSET_WINDOW_H})")
@@ -64,9 +75,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def discover_csv_files() -> tuple:
-    """(files to analyse, files skipped) from Temp/C*/, filtered to the 8 conditions."""
-    temp_dir = pathlib.Path(__file__).parent / "Temp"
+def discover_csv_files(campaign: str) -> tuple:
+    """(files to analyse, files skipped) from Temp/campana-<n>/C*/, filtered to the conditions."""
+    temp_dir = pathlib.Path(__file__).parent / "Temp" / f"campana-{campaign}"
+    if not temp_dir.is_dir():
+        print(f"[ERROR] No data directory for campaign {campaign}: {temp_dir}",
+              file=sys.stderr)
+        sys.exit(1)
     discovered = sorted(temp_dir.glob("C*/*.csv"))
     # `C0_baseline` is a PRELIMINARY run predating this protocol: logged at 1 Hz
     # instead of 10 s, no metadata header, no sample_index column. Auto-including
@@ -78,7 +93,8 @@ def discover_csv_files() -> tuple:
 
 def main() -> None:
     args = parse_args()
-    out_root = pathlib.Path(args.output_dir)
+    out_root = pathlib.Path(args.output_dir) if args.output_dir \
+        else pathlib.Path("results") / f"campana-{args.campaign}"
 
     figures.configure(args.plot_format, args.dpi)
 
@@ -88,10 +104,10 @@ def main() -> None:
     # would be reported as missing — 17 false entries in a 5-file test run.
     full_campaign = not csv_files
     if not csv_files:
-        csv_files, skipped = discover_csv_files()
+        csv_files, skipped = discover_csv_files(args.campaign)
         if not csv_files:
-            print("[ERROR] No study-condition CSV files found in Temp/C*/",
-                  file=sys.stderr)
+            print(f"[ERROR] No study-condition CSV files found in "
+                  f"Temp/campana-{args.campaign}/C*/", file=sys.stderr)
             sys.exit(1)
         print(f"[analyse] Auto-discovered {len(csv_files)} file(s) across the "
               f"{len(STUDY_CONDITIONS)} study conditions")
@@ -170,6 +186,28 @@ def main() -> None:
         figures.plot_condition_overlay(curves, out_root)
         print(f"[analyse] condition overlay → "
               f"{out_root / 'comparison_condition_means'}.{args.plot_format}")
+
+    # ── focus set ─────────────────────────────────────────────────────────────
+    # The same two cross-run figures restricted to the four first-use conditions,
+    # which isolate the catheter-geometry question (see config.FOCUS_CONDITIONS).
+    # Rendered by the SAME functions rather than copies of them, so the encoding —
+    # fixed hue per condition, filtered-derived shared scale, air shading — cannot
+    # drift between the two views. Only the y-scale differs, and legitimately: it
+    # is derived from the runs actually drawn, so dropping the widest-swinging
+    # runs lets the remaining panels use the full height.
+    focus_runs = [r for r in runs if r["condition"] in FOCUS_CONDITIONS]
+    focus_curves = {c: v for c, v in curves.items() if c in FOCUS_CONDITIONS}
+    if focus_runs:
+        figures.plot_replicate_matrix(focus_runs, out_root, args.ma_window_min,
+                                      stem="focus_replicate_matrix")
+        print(f"[analyse] FOCUS replicate matrix ({len(focus_runs)} runs, "
+              f"{'/'.join(FOCUS_CONDITIONS)}) → "
+              f"{out_root / 'focus_replicate_matrix'}.{args.plot_format}")
+    if len(focus_curves) > 1:
+        figures.plot_condition_overlay(focus_curves, out_root,
+                                       stem="focus_condition_means")
+        print(f"[analyse] FOCUS condition overlay ({len(focus_curves)} conditions) → "
+              f"{out_root / 'focus_condition_means'}.{args.plot_format}")
 
     if incomplete or not_performed:
         print(f"\n[analyse] {len(incomplete)} incomplete + {len(not_performed)} "
