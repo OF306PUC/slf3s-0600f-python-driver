@@ -18,6 +18,8 @@ import queue as queue_module
 
 log = logging.getLogger(__name__)
 
+STARTUP_ATTEMPTS = 3
+
 
 def in_device_communication(
         port, baudrate, queue, slave_address, logger, ring_buffer, stop_logger_event,
@@ -53,7 +55,22 @@ def _run_communication(
         i2c_transceive_stop_cmd = ShdlcStopContinuousMeasurement(
             stop_code=ShdlcStopContinuousMeasurement._I2C_STOP_CODE
         )
-        _, error  = interface.execute(slave_address, i2c_transceive_stop_cmd)
+        # First frame after opening the port: the adapter may still be settling
+        # (or answering a previous session), so retry before giving up.
+        for attempt in range(1, STARTUP_ATTEMPTS + 1):
+            try:
+                _, error = interface.execute(slave_address, i2c_transceive_stop_cmd)
+                break
+            except RuntimeError as exc:
+                log.warning("(1) No response from the adapter (attempt %d/%d): %s",
+                            attempt, STARTUP_ATTEMPTS, exc)
+                if attempt == STARTUP_ATTEMPTS:
+                    raise RuntimeError(
+                        f"the adapter on {port} never answered. Check that no other "
+                        f"process or container is using the port (docker ps; fuser "
+                        f"{port}), that {port} is the sensor cable and not another "
+                        f"USB-serial device, and unplug/replug the cable") from exc
+                time.sleep(1)
         log.info("(1) Stopping continuous measurement")
         if error:
             log.warning("Stop command returned error state: %s", error)
