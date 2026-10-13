@@ -11,7 +11,23 @@ fi
 
 # ── config ────────────────────────────────────────────────────────────────────
 IMAGE="slf3s-logger"
-DEVICE="${DEVICE:-/dev/ttyUSB0}"
+# DEVICE: the sensor cable's serial port. Default: the single entry under
+# /dev/serial/by-id/. That name is fixed by the adapter's serial number, so it
+# survives a USB disconnect/reconnect — /dev/ttyUSB0 does not (the kernel may
+# bring the adapter back as ttyUSB1, and the logger could never reopen it).
+if [ -z "${DEVICE:-}" ]; then
+    shopt -s nullglob
+    ids=(/dev/serial/by-id/*)
+    shopt -u nullglob
+    if [ "${#ids[@]}" -eq 1 ]; then
+        DEVICE="${ids[0]}"
+    else
+        echo "ERROR: found ${#ids[@]} serial devices under /dev/serial/by-id/; set DEVICE" >&2
+        echo "       to the sensor cable's entry:" >&2
+        ls -l /dev/serial/by-id/ >&2 2>/dev/null || true
+        exit 1
+    fi
+fi
 
 # ── guards ────────────────────────────────────────────────────────────────────
 # MANIFEST must be chosen explicitly. A default would let a study run go out
@@ -49,6 +65,7 @@ ARGS=(
     # is rejected by the pre-launch check below — remove it or set it to 20.
     --sampling-ms      "${SAMPLING_MS:-20}"
     --device-id        "${DEVICE_LOGGER_ID:-UNKNOWN}"
+    --port             "$DEVICE"
 )
 if [ "$MANIFEST" != "none" ]; then ARGS+=(--manifest "/app/manifests/$MANIFEST"); fi
 # Shorthands for the two fields existing launch environments already set. Any

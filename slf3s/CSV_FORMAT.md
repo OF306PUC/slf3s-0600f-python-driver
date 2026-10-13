@@ -19,7 +19,7 @@ field. The raw readings themselves are in the companion `.bin` file
 window_index,UTC_Time,Flow_ul_min,…                                 ← 2. column header
 0,1791229016.237,74.6123,…                                          ← 3. one row per window
 …
-# END experiment=C1_rep_1 samples=4521 raw_samples=2712600 status=COMPLETE   ← 4. footer
+# END experiment=C1_rep_1 samples=4521 raw_samples=13563000 coverage=0.9998 end_utc=… status=COMPLETE   ← 4. footer
 ```
 
 ---
@@ -121,13 +121,15 @@ as an invented row.
 ## 4. Footer
 
 ```
-# END experiment=<configuration>_<experiment_rep> samples=<rows> raw_samples=<readings> status=<COMPLETE|INTERRUPTED>
+# END experiment=<configuration>_<experiment_rep> samples=<rows> raw_samples=<readings> coverage=<0..1> end_utc=<ISO 8601> status=<COMPLETE|INTERRUPTED>
 ```
 
 | Field | Meaning |
 |---|---|
 | `samples` | Number of **data rows** written — a reader can check it against the rows it parsed |
 | `raw_samples` | Number of raw readings received (= records in the `.bin`) |
+| `coverage` | Readings received ÷ readings the run's duration should have produced at `sampling_ms`, counted from the first reading to the close (minus a 2 s closing allowance), capped at 1. **Below 0.99 the run lost data** even if `status` is `COMPLETE` — e.g. the USB adapter dropped off the bus for hours. Absent before 2026-10-13 |
+| `end_utc` | When the file was closed, ISO 8601 UTC. Absent before 2026-10-13 (use the file's modification time) |
 | `status` | `COMPLETE` when the run ended normally (duration reached or end of infusion detected); `INTERRUPTED` on SIGINT/SIGTERM |
 
 **A file without a footer was not closed by the logger** — the process died — and

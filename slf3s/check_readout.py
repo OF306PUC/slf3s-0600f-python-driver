@@ -22,7 +22,12 @@ timing. Everything this script checks is a property of the raw stream:
      the time since the previous read is under 100 ms; past that it switches to
      exponential smoothing and the value covers just its last ~100 ms (datasheet
      §3.1). A reading with bit 5 set therefore did NOT cover its whole interval.
-  4. Stale readings — two consecutive readings identical in flow, temperature and
+  4. Run coverage — readings in the binary versus the run's duration, taken
+     from the companion CSV (start_utc in its header; end_utc in its footer, or
+     the file's modification time for files written before 2026-10-13). The
+     checks above only judge the readings that exist: a run whose adapter
+     dropped off the USB bus after 3 minutes passes them all while missing 47 h.
+  5. Stale readings — two consecutive readings identical in flow, temperature and
      flags. At a steady flow some of these are pure coincidence (the temperature
      barely moves and the flow is quantised in 0.1 µL/min steps), so they are
      reported for information and only fail when they are so frequent that they
@@ -31,7 +36,9 @@ timing. Everything this script checks is a property of the raw stream:
 Exit status: 0 = PASS, 1 = WARN, 2 = FAIL, 3 = file error.
 """
 import argparse
+import datetime
 import pathlib
+import re
 import statistics
 import struct
 import sys
@@ -49,6 +56,8 @@ COVER_WARN = 0.001       # >0.1 % of intervals over 100 ms → WARN
 COVER_FAIL = 0.01        # >1 % → FAIL
 EXP_WARN = 0.01          # >1 % of readings in exponential smoothing → WARN
 EXP_FAIL = 0.05          # >5 % → FAIL
+RUN_COVER_WARN = 0.999   # readings / run duration below this → WARN
+RUN_COVER_FAIL = 0.99    # below this → FAIL
 STALE_FAIL = 0.40       # chance repeats at steady flow are a few %; cached ≈ ≥50 %
 
 
@@ -61,6 +70,31 @@ def read_records(path: pathlib.Path):
     usable = (len(raw) - offset) // size * size
     return [struct.unpack_from(core.BIN_RECORD_FMT, raw, offset + i)
             for i in range(0, usable, size)]
+
+
+def run_span(bin_path: pathlib.Path):
+    """(start, end, source) of the run from the companion CSV, or None."""
+    csv_path = bin_path.with_suffix(".csv")
+    if not csv_path.is_file():
+        return None
+    start = end = None
+    with csv_path.open() as f:
+        for line in f:
+            if not line.startswith("#"):
+                continue
+            m = re.match(r"#\s*start_utc\s*:\s*(\S+)", line)
+            if m:
+                start = m.group(1)
+            m = re.search(r"\bend_utc=(\S+)", line)
+            if m:
+                end = m.group(1)
+    if start is None:
+        return None
+    parse = lambda iso: datetime.datetime.strptime(
+        iso, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.timezone.utc).timestamp()
+    if end is not None:
+        return parse(start), parse(end), "CSV footer"
+    return parse(start), csv_path.stat().st_mtime, "CSV modification time"
 
 
 def pct(xs, q):
@@ -102,9 +136,21 @@ def main() -> int:
         per_min[int((t - ts[0]) // 60)] = per_min.get(int((t - ts[0]) // 60), 0) + 1
     full = [n for k, n in per_min.items() if k < max(per_min)]   # drop last partial
 
+    span = run_span(path)
+    run_cov = None
+    if span:
+        # From the first reading (start-up takes a few seconds) to the close.
+        run_s = span[1] - max(span[0], ts[0]) - core.CLOSE_ALLOWANCE_S
+        run_cov = min(len(recs) / (run_s / exp_s), 1.0) if run_s > 0 else None
+
     ms = [d * 1000 for d in dts]
     print(f"\nReadout check — {path.name}")
     print(f"  readings            {len(recs):,} over {duration/60:.1f} min")
+    if span and run_cov is not None:
+        print(f"  run duration        {run_s/60:.1f} min from the first reading ({span[2]})  →  "
+              f"coverage {run_cov*100:.2f} % of the expected readings")
+    else:
+        print("  run duration        unknown (no companion CSV) — coverage not checked")
     print(f"  expected interval   {args.expected_ms:.0f} ms  ({1000/args.expected_ms:.2f} Hz)")
     print(f"  effective rate      {rate:.3f} Hz  ({(rate*exp_s-1)*100:+.2f} %)")
     print(f"  interval  median    {statistics.median(ms):.1f} ms   "
@@ -134,6 +180,13 @@ def main() -> int:
         flag(1, f"effective rate off by {(rate*exp_s-1)*100:+.1f} % — the host is not "
                 f"keeping the schedule (data is complete while gaps stay under "
                 f"{COVERAGE_MS:.0f} ms)")
+    if run_cov is not None:
+        if run_cov < RUN_COVER_FAIL:
+            flag(2, f"the binary holds {run_cov*100:.1f} % of the readings the run's "
+                    f"duration should have produced — readings stopped or were lost "
+                    f"(check the logs for USB disconnects)")
+        elif run_cov < RUN_COVER_WARN:
+            flag(1, f"run coverage {run_cov*100:.2f} %")
     frac_late = len(late) / len(dts)
     if frac_late > LATE_WARN:
         flag(1, f"{frac_late*100:.2f} % of intervals late")

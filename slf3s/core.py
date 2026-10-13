@@ -56,6 +56,9 @@ BIN_RECORD_SIZE = struct.calcsize(BIN_RECORD_FMT)   # 14 bytes per record
 # removed metadata key, a changed unit. Adding a NEW metadata line does not require
 # a bump, because a reader that ignores unknown keys is unaffected.
 CSV_FORMAT_VERSION = 2
+# The logger drains the queue and closes the file up to ~1 s after the last
+# scheduled reading; coverage (footer, check_readout.py) discounts this much.
+CLOSE_ALLOWANCE_S = 2.0
 
 BIN_MAGIC = b'SLF3SLOG\x00\x00\x00\x01'             # 12-byte magic
 BIN_VERSION = 1                                       # uint32

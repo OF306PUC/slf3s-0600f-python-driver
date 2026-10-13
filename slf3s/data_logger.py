@@ -221,6 +221,8 @@ def dual_logger(
     configuration = metadata.get("configuration", "UNKNOWN")
     experiment_rep = metadata.get("experiment_rep", "UNKNOWN")
     start_utc = _utc_now_iso()
+    t_first = None              # first reading: coverage counts from here, so the
+                                # sensor start-up (~5 s) is not counted as missing
     sample_index = 0            # raw readings received
     rows_written = 0            # CSV windows written
     aggregator = WindowAggregator(core.AGGREGATE_S)
@@ -246,6 +248,8 @@ def dual_logger(
                     continue
 
                 timestamp, flow_raw, temp_raw, flags_raw = item
+                if t_first is None:
+                    t_first = timestamp
                 flow_ul_min, temp_c = core.interpret_flow_temp_raw(flow_raw, temp_raw)
                 flag_air, flag_high_flow, exp_smoothing, flags_value = (
                     core.interpret_flags_raw(flags_raw)
@@ -301,11 +305,22 @@ def dual_logger(
     finally:
         interrupted = interrupted_event is not None and interrupted_event.is_set()
         status = "INTERRUPTED" if interrupted else "COMPLETE"
+        # Readings received / readings the run's duration should have produced.
+        # A COMPLETE run can still be mostly empty (adapter lost for hours):
+        # coverage is what says so.
+        expected = ((time.time() - t_first - core.CLOSE_ALLOWANCE_S) * 1000 / sampling_interval
+                    if t_first is not None else 0)
+        coverage = min(sample_index / expected, 1.0) if expected > 0 else 0.0
+        if coverage < 0.99:
+            logger.log_error(
+                ErrorCodes.LOGGER_FAILURE,
+                f"Low coverage: {coverage:.4f} of the expected readings were received")
         try:
             with csv_path.open("a") as f:
                 f.write(
                     f"# END experiment={configuration}_{experiment_rep} "
                     f"samples={rows_written} raw_samples={sample_index} "
+                    f"coverage={coverage:.4f} end_utc={_utc_now_iso()} "
                     f"status={status}\n"
                 )
         except Exception:
