@@ -56,6 +56,19 @@ run survives the SSH session. Data land in `./data/`, logs in `./logs/`.
 The serial port defaults to the single entry under `/dev/serial/by-id/`, a name
 that survives reconnection; set `DEVICE` only if the host has several.
 
+### How it runs on a host
+
+It is a **Docker container** (`slf3s-logger`), not a system service:
+
+| | |
+|---|---|
+| Start | `./run.sh` (validate → build → `docker run -d`) |
+| Running? | `docker ps` · `docker logs -f slf3s-logger` · `tail -2 data/<RUN>.csv` |
+| Stop by hand | `docker stop slf3s-logger` |
+| Stops by itself | flow near zero for ~20 min (unless `END_OF_INFUSION=off`), or `HOURS` |
+| After a reboot / power cut | **not restarted** — on purpose: relaunching with the same `CONFIG`/`EXPERIMENT_REP` would overwrite the run's files. Relaunch under a new replicate name. |
+| Verify a finished run | `python3 slf3s/check_readout.py data/<RUN>.bin` → PASS, and footer `coverage` ≥ 0.99 |
+
 ## Experiment manifests
 
 One TOML file per campaign of an experiment, under `manifests/`:
