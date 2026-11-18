@@ -11,7 +11,10 @@ import pathlib
 
 import numpy as np
 
-from config import EXPECTED_REPLICATES, methodology_provenance
+import config
+from config import (
+    methodology_provenance,
+)
 
 
 def average_condition(runs: list, dt_h: float = None) -> dict:

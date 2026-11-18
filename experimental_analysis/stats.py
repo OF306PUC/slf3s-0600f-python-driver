@@ -15,9 +15,9 @@ None of these mutate their inputs or touch the filesystem.
 import numpy as np
 from scipy.signal import freqz
 
+import config
 from config import (
-    SENSOR_IIR_ALPHA, SENSOR_INTERNAL_FS, T_OP_DECLARED_C,
-    corrected_nominal_flow_ml_hr,
+    SENSOR_IIR_ALPHA, SENSOR_INTERNAL_FS, corrected_nominal_flow_ml_hr,
 )
 
 
@@ -72,7 +72,8 @@ def moving_average_response(n_samples: int, fs_hz: float, n_fft: int = 16384):
     return freqs, 20.0 * np.log10(np.abs(h) + 1e-12)
 
 
-def filter_chain_report(fs_hz: float, ma_window_samples: int) -> dict:
+def filter_chain_report(fs_hz: float, ma_window_samples: int,
+                        sensor_iir_active: bool = True) -> dict:
     """
     The acquisition + analysis low-pass chain, as numbers.
 
@@ -82,7 +83,9 @@ def filter_chain_report(fs_hz: float, ma_window_samples: int) -> dict:
     the analysis moving average, some 300× narrower than the sensor's own filter,
     which is four decades away and irrelevant to infusion dynamics.
     """
-    f_iir = sensor_iir_cutoff_hz()
+    # At a readout interval below 100 ms the sensor averages arithmetically and
+    # its IIR smoother is never engaged (datasheet § 3.1): no stage to report.
+    f_iir = sensor_iir_cutoff_hz() if sensor_iir_active else float("nan")
     f_nyquist = fs_hz / 2.0
     freqs, mag_db = moving_average_response(ma_window_samples, fs_hz)
     f_ma = _minus3db_cutoff_hz(freqs, mag_db)
@@ -101,6 +104,10 @@ def filter_chain_report(fs_hz: float, ma_window_samples: int) -> dict:
             "reason": "f_ro = f_s = 10 s selects the sensor's recursive smoother",
             "alpha": SENSOR_IIR_ALPHA,
             "internal_fs_hz": SENSOR_INTERNAL_FS,
+        } if sensor_iir_active else {
+            "active": False,
+            "reason": "readout every 20 ms (< 100 ms): the sensor averages "
+                      "arithmetically; each row is a 60 s block mean",
         },
         "readout": {"f_ro_hz": round(fs_hz, 6), "f_s_hz": round(fs_hz, 6)},
         "analysis_moving_average": {
@@ -216,15 +223,15 @@ def temperature_report(temp: np.ndarray) -> dict:
     if finite.size == 0:
         return {"available": False}
     t_mean = float(np.mean(finite))
-    q_declared = corrected_nominal_flow_ml_hr(T_OP_DECLARED_C)
+    q_declared = corrected_nominal_flow_ml_hr(config.T_OP_DECLARED_C)
     q_measured = corrected_nominal_flow_ml_hr(t_mean)
     return {
         "available": True,
         "T_min_C": round(float(np.min(finite)), 3),
         "T_max_C": round(float(np.max(finite)), 3),
         "T_mean_C": round(t_mean, 3),
-        "T_declared_C": T_OP_DECLARED_C,
-        "T_offset_measured_minus_declared_C": round(t_mean - T_OP_DECLARED_C, 3),
+        "T_declared_C": config.T_OP_DECLARED_C,
+        "T_offset_measured_minus_declared_C": round(t_mean - config.T_OP_DECLARED_C, 3),
         "q_corr_at_declared_T_ml_hr": round(q_declared, 4),
         "q_corr_at_measured_T_ml_hr": round(q_measured, 4),
         "q_corr_sensitivity_pct": round(

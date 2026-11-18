@@ -54,13 +54,33 @@ def read_footer_status(csv_path: pathlib.Path) -> dict:
     return {"footer_present": True, "status": status, "samples": samples}
 
 
-def load_csv(csv_path: pathlib.Path) -> pd.DataFrame:
+def format_version(metadata: dict) -> int:
+    """
+    The CSV layout version: 0 for the legacy per-reading files (campaign 1, written
+    before versioning), 2 for one row per 60 s window (slf3s/CSV_FORMAT.md).
+    """
+    try:
+        return int(metadata.get("format_version", 0))
+    except ValueError:
+        return 0
+
+
+def load_csv(csv_path: pathlib.Path, keep_air_rows: bool = False) -> pd.DataFrame:
+    """
+    The data rows as numbers.
+
+    `keep_air_rows` is for format 2, where a window whose readings were ALL air
+    has `Flow_ul_min = nan` by design: dropping those rows would erase the purge
+    from the record and with it the air intervals. They are kept, and the air
+    mask excludes them downstream exactly as it excludes legacy air samples.
+    """
     df = pd.read_csv(csv_path, comment="#", thousands=",")
     if df.empty:
         raise ValueError(f"No data rows in {csv_path}")
     for col in df.columns:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    df.dropna(subset=["UTC_Time", "Flow_ul_min"], inplace=True)
+    df.dropna(subset=["UTC_Time"] if keep_air_rows else ["UTC_Time", "Flow_ul_min"],
+              inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
 

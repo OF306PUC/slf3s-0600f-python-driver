@@ -15,11 +15,9 @@ import numpy as np
 
 import csv_io
 
+import config
 from config import (
-    EXPECTED_REPLICATES, FOCUS_CONDITIONS, MA_WINDOW_MIN, NOM_FLOW_CORR_ML_HR,
-    NOM_FLOW_ML_HR,
-    NACL_FACTOR, SENSOR_IIR_ALPHA, STUDY_CONDITIONS, T_OP_DECLARED_C,
-    TEFF_FRAC_OF_NOMINAL, description_for, methodology_provenance,
+    MA_WINDOW_MIN, NOM_FLOW_ML_HR, NACL_FACTOR, SENSOR_IIR_ALPHA, TEFF_FRAC_OF_NOMINAL, description_for, methodology_provenance,
 )
 
 
@@ -65,9 +63,7 @@ def _conditions_section(runs: list, incomplete: list) -> list:
     lines = [
         "## Study conditions",
         "",
-        "What was in line for each condition code. The `a`/`b` suffix denotes **pump "
-        "reuse** — `a` a first-use pump, `b` a second-use pump — so the same "
-        "catheter is compared against itself as the pump deteriorates.",
+        config.CONDITIONS_NOTE,
         "",
     ]
     analysed = {}
@@ -78,13 +74,13 @@ def _conditions_section(runs: list, incomplete: list) -> list:
         excluded.setdefault(i["condition"], []).append(i["replicate"])
 
     rows = []
-    for cond in STUDY_CONDITIONS:
+    for cond in config.STUDY_CONDITIONS:
         got = sorted(analysed.get(cond, []))
         exc = sorted(excluded.get(cond, []))
         rows.append([
             cond,
             description_for(cond),
-            f"{len(got)} / {EXPECTED_REPLICATES.get(cond, 0)}",
+            f"{len(got)} / {config.EXPECTED_REPLICATES.get(cond, 0)}",
             ", ".join(got) if got else "—",
             ", ".join(exc) if exc else "—",
         ])
@@ -117,7 +113,7 @@ def _methodology_section(runs: list) -> list:
         [["ambient temperature",
           f"{prov['ambient_temperature_declared_C']:.0f} °C",
           "declared operating point; the primary value for the flow correction"],
-         ["acquisition rate", "0.1 Hz (10 s)",
+         ["acquisition rate", config.ACQUISITION_TEXT,
           "sensor readout and serial polling locked together, f_ro = f_s"],
          ["sensor calibration medium", prov["sensor_calibration_medium"],
           "any other fluid needs a correction factor"],
@@ -134,12 +130,13 @@ def _methodology_section(runs: list) -> list:
           f"{prov['hydrostatic_head_m']:.1f} m",
           prov["hydrostatic_head_note"]],
          ["sensor internal filter",
-          f"exponential IIR, α = {SENSOR_IIR_ALPHA}",
-          "selected by the sensor because the readout rate is 0.1 Hz"],
+          config.SENSOR_FILTER_TEXT,
+          config.SENSOR_FILTER_NOTE],
          ["nominal flow", f"{prov['nominal_flow_ml_hr']:.1f} mL/hr", "pump setting"],
          ["corrected nominal flow",
           f"{prov['corrected_nominal_flow_ml_hr_at_declared_T']:.2f} mL/hr",
-          "nominal × fluid factor × temperature correction, at the declared 22 °C"]],
+          f"nominal × fluid factor × temperature correction, at the declared "
+          f"{config.T_OP_DECLARED_C:.0f} °C"]],
     ))
     lines += [
         "",
@@ -160,7 +157,7 @@ def _methodology_section(runs: list) -> list:
     if temps and sens:
         lines += [
             f"- **Measured device temperature runs {min(temps):.1f}–{max(temps):.1f} "
-            f"°C**, above the declared {T_OP_DECLARED_C:.0f} °C. Using the measured "
+            f"°C**, above the declared {config.T_OP_DECLARED_C:.0f} °C. Using the measured "
             f"value instead would raise the corrected nominal flow by "
             f"{min(sens):+.1f} % to {max(sens):+.1f} %. The declared value is kept "
             f"as primary for cross-run comparability; the per-run sensitivity is in "
@@ -178,6 +175,10 @@ def _configuration_section(runs: list) -> list:
         "are the parameters that actually ran — not what a launch script intended.",
         "",
     ]
+    # The blocking factors of the campaign-main design (sensor, tanda) appear only
+    # when some run records them, so campaign-1 reports keep their columns.
+    factors = [k for k in ("sensor", "tanda")
+               if any(k in r["stats"]["metadata"] for r in runs)]
     rows = []
     for r in sorted(runs, key=lambda x: x["experiment_name"]):
         m = r["stats"]["metadata"]
@@ -194,11 +195,11 @@ def _configuration_section(runs: list) -> list:
             m.get("sampling_ms", "—"),
             m.get("f_ro_hz", "—"),
             start[:10] if start != "—" else "—",
-        ])
+        ] + [m.get(k, "—") for k in factors])
     lines.append(_md_table(
         ["run", "code", "catheter configuration", "pump lot", "fluid", "device",
-         "sampling (ms)", "f_ro (Hz)", "start (UTC)"],
-        rows, ["l", "l", "l", "l", "l", "r", "r", "r", "l"],
+         "sampling (ms)", "f_ro (Hz)", "start (UTC)"] + factors,
+        rows, ["l", "l", "l", "l", "l", "r", "r", "r", "l"] + ["l"] * len(factors),
     ))
     mismatched = [r["stats"]["experiment_name"] for r in runs
                   if r["stats"]["condition_source"] == "folder"]
@@ -230,15 +231,19 @@ def _pipeline_section(params: dict, runs: list) -> list:
           "the logger's own verdict"],
          ["2. air detection",
           "flag samples the sensor marked as air in line",
-          "`Flag_Air`"],
+          "`Flag_Air`" if config.CAMPAIGN == "1"
+          else "60 s windows where most readings carry the air flag"],
          ["3. offset correction",
           "subtract the zero-flow offset from **every** flow sample",
-          f"mean of the first {params['offset_window_h']} h, clipped to the purge end"],
+          f"mean of the first {params['offset_window_h']} h, clipped to the purge end"
+          if config.OFFSET_SOURCE == "window"
+          else "per-sensor value from the static zero test (liquid-filled, "
+               f"capped sensor): `{config.OFFSET_TABLE.name}`"],
          ["4. bubble-transit rejection",
           "flag the burst a bubble produces — excursion, near-zero plateau, "
           "second excursion — which `Flag_Air` does not fully cover",
           "|q| > 1.5x nominal **or** `Flag_High_Flow`, plus touching near-zero "
-          "runs and a 2-sample guard"],
+          f"runs and a {config.BUBBLE_GUARD_SAMPLES}-sample guard"],
          ["5. onset detection",
           "find infusion onset and re-base time so t = 0 there; cut everything before",
           "first sustained air- and bubble-free sample above 3σ of the offset "
@@ -281,7 +286,8 @@ def _pipeline_section(params: dict, runs: list) -> list:
         ]
         lines.append(_md_table(
             ["stage", "−3 dB cutoff"],
-            [["1. sensor internal IIR smoother",
+            [["1. sensor internal IIR smoother" if config.CAMPAIGN == "1"
+              else "1. sensor (arithmetic mean, IIR not engaged)",
               f"{cuts['1_sensor_iir_hz']:.2f} Hz" if cuts["1_sensor_iir_hz"] else "—"],
              ["2. readout / sampling (Nyquist)",
               f"{cuts['2_readout_nyquist_hz']:.3f} Hz"],
@@ -311,9 +317,11 @@ def _focus_section(runs: list, curves: dict, params: dict) -> list:
     across two variables at once, which is precisely the mistake this section
     exists to prevent.
     """
+    if not config.FOCUS_CONDITIONS:
+        return []
     fmt = params["plot_format"]
-    members = {c: [r for r in runs if r["condition"] == c] for c in FOCUS_CONDITIONS}
-    present = [c for c in FOCUS_CONDITIONS if members[c]]
+    members = {c: [r for r in runs if r["condition"] == c] for c in config.FOCUS_CONDITIONS}
+    present = [c for c in config.FOCUS_CONDITIONS if members[c]]
 
     lines = [
         "## Focus conditions — catheter geometry",
@@ -322,7 +330,7 @@ def _focus_section(runs: list, curves: dict, params: dict) -> list:
         "a single variable: the catheter in line. `C0a` is the no-catheter "
         "baseline and the other three are the geometries measured against it.",
         "",
-        f"- Conditions: **{', '.join(FOCUS_CONDITIONS)}**",
+        f"- Conditions: **{', '.join(config.FOCUS_CONDITIONS)}**",
         f"- Runs in this set: **{sum(len(m) for m in members.values())}** of "
         f"{len(runs)} analysed",
         f"- Figures: `focus_replicate_matrix.{fmt}` (one panel per run) and "
@@ -338,9 +346,9 @@ def _focus_section(runs: list, curves: dict, params: dict) -> list:
     # flow — V/T_eff is what a catheter geometry is expected to move, and it is
     # the one number that makes the four directly comparable at a glance.
     rows = []
-    for cond in FOCUS_CONDITIONS:
+    for cond in config.FOCUS_CONDITIONS:
         m = members[cond]
-        expected = EXPECTED_REPLICATES.get(cond, 0)
+        expected = config.EXPECTED_REPLICATES.get(cond, 0)
         if not m:
             rows.append([cond, description_for(cond), f"0 / {expected}"]
                         + ["—"] * 4)
@@ -419,7 +427,7 @@ def write_summary_report(runs: list, incomplete: list, not_performed: list,
         f"- Runs excluded as incomplete: **{len(incomplete)}**",
         f"- Runs never performed: **{len(not_performed)}**",
         f"- Conditions with an averaged curve: **{len(curves)}** of "
-        f"{len(EXPECTED_REPLICATES)}",
+        f"{len(config.EXPECTED_REPLICATES)}",
         f"- Figures: {params['plot_format']} at {params['dpi']} dpi",
         "",
         "Every run also carries this same methodology block inside its own "
@@ -438,8 +446,9 @@ def write_summary_report(runs: list, incomplete: list, not_performed: list,
     lines += ["", ""]
 
     # ── focus set, ahead of the full campaign ─────────────────────────────────
-    lines += _focus_section(runs, curves, params)
-    lines += ["", ""]
+    focus = _focus_section(runs, curves, params)
+    if focus:
+        lines += focus + ["", ""]
 
     # ── results ───────────────────────────────────────────────────────────────
     lines += ["", "## Results per run", "",
@@ -477,13 +486,18 @@ def write_summary_report(runs: list, incomplete: list, not_performed: list,
             _n(s["air"]["fraction_total"] * 100.0, "{:.1f}"),
             _n(s["air"]["leading_air_end_h"], "{:.2f}"),
             _n(s["offset_correction"]["offset_ul_min"], "{:+.3f}"),
-            _n(s["offset_correction"]["window_h"], "{:.2f}"),
+            # Per-run window (campaign 1) or the run's sensor (static zero test).
+            _n(s["offset_correction"].get("window_h"), "{:.2f}")
+            if config.OFFSET_SOURCE == "window"
+            else s["offset_correction"].get("sensor", "—"),
             _n(s["onset"]["t_onset_h_on_logging_timebase"], "{:.2f}"),
             s["condition_source"],
         ])
     lines.append(_md_table(
         ["run", "logged (h)", "samples", "air (%)", "purge end (h)",
-         "offset (µL/min)", "offset win (h)", "onset (h)", "cond. source"],
+         "offset (µL/min)",
+         "offset win (h)" if config.OFFSET_SOURCE == "window" else "offset from sensor",
+         "onset (h)", "cond. source"],
         rows, ["l"] + ["r"] * 7 + ["l"],
     ))
 
@@ -492,10 +506,10 @@ def write_summary_report(runs: list, incomplete: list, not_performed: list,
               "`full coverage` is how far all replicates still have data; beyond "
               "it the mean is backed by fewer.", ""]
     rows = []
-    for cond in STUDY_CONDITIONS:
+    for cond in config.STUDY_CONDITIONS:
         c = curves.get(cond)
         members = [r for r in runs if r["condition"] == cond]
-        expected = EXPECTED_REPLICATES.get(cond, 0)
+        expected = config.EXPECTED_REPLICATES.get(cond, 0)
         if not members:
             rows.append([cond, description_for(cond), f"0 / {expected}",
                          "—", "—", "—", "—"])

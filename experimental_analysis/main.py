@@ -42,9 +42,10 @@ import aggregate
 import figures
 import pipeline
 import report
-from config import (CAMPAIGNS, DEFAULT_CAMPAIGN, EXPECTED_REPLICATES,
-                    FOCUS_CONDITIONS, MA_WINDOW_MIN, OFFSET_WINDOW_H,
-                    STUDY_CONDITIONS, colour_for)
+import config
+from config import (
+    CAMPAIGNS, DEFAULT_CAMPAIGN, MA_WINDOW_MIN, OFFSET_WINDOW_H, colour_for,
+)
 from figures import DEFAULT_DPI
 
 
@@ -87,12 +88,15 @@ def discover_csv_files(campaign: str) -> tuple:
     # instead of 10 s, no metadata header, no sample_index column. Auto-including
     # it would silently mix a different timebase into the comparison, so it is
     # skipped; name its path explicitly to analyse it alone.
-    keep = [p for p in discovered if p.parent.name in STUDY_CONDITIONS]
+    keep = [p for p in discovered if p.parent.name in config.STUDY_CONDITIONS]
     return keep, [p for p in discovered if p not in keep]
 
 
 def main() -> None:
     args = parse_args()
+    # Must come before anything reads the study definition: it decides which
+    # conditions, replicate counts, declared temperature and offset source apply.
+    config.use_campaign(args.campaign)
     out_root = pathlib.Path(args.output_dir) if args.output_dir \
         else pathlib.Path("results") / f"campana-{args.campaign}"
 
@@ -110,7 +114,7 @@ def main() -> None:
                   f"Temp/campana-{args.campaign}/C*/", file=sys.stderr)
             sys.exit(1)
         print(f"[analyse] Auto-discovered {len(csv_files)} file(s) across the "
-              f"{len(STUDY_CONDITIONS)} study conditions")
+              f"{len(config.STUDY_CONDITIONS)} study conditions")
         if skipped:
             print(f"[analyse] Skipped {len(skipped)} file(s) outside the study "
                   f"conditions (pass a path explicitly): "
@@ -147,7 +151,7 @@ def main() -> None:
     if full_campaign:
         seen = {(r["condition"], r["replicate"]) for r in runs}
         seen |= {(i["condition"], i["replicate"]) for i in incomplete}
-        for cond, expected in EXPECTED_REPLICATES.items():
+        for cond, expected in config.EXPECTED_REPLICATES.items():
             for k in range(1, expected + 1):
                 rep = f"rep_{k}"
                 if (cond, rep) not in seen:
@@ -155,7 +159,7 @@ def main() -> None:
 
     # ── per-condition averages ────────────────────────────────────────────────
     curves = {}
-    for cond in STUDY_CONDITIONS:
+    for cond in config.STUDY_CONDITIONS:
         members = [r for r in runs if r["condition"] == cond]
         if not members:
             continue
@@ -195,13 +199,13 @@ def main() -> None:
     # drift between the two views. Only the y-scale differs, and legitimately: it
     # is derived from the runs actually drawn, so dropping the widest-swinging
     # runs lets the remaining panels use the full height.
-    focus_runs = [r for r in runs if r["condition"] in FOCUS_CONDITIONS]
-    focus_curves = {c: v for c, v in curves.items() if c in FOCUS_CONDITIONS}
+    focus_runs = [r for r in runs if r["condition"] in config.FOCUS_CONDITIONS]
+    focus_curves = {c: v for c, v in curves.items() if c in config.FOCUS_CONDITIONS}
     if focus_runs:
         figures.plot_replicate_matrix(focus_runs, out_root, args.ma_window_min,
                                       stem="focus_replicate_matrix")
         print(f"[analyse] FOCUS replicate matrix ({len(focus_runs)} runs, "
-              f"{'/'.join(FOCUS_CONDITIONS)}) → "
+              f"{'/'.join(config.FOCUS_CONDITIONS)}) → "
               f"{out_root / 'focus_replicate_matrix'}.{args.plot_format}")
     if len(focus_curves) > 1:
         figures.plot_condition_overlay(focus_curves, out_root,

@@ -22,10 +22,9 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
 
 import utils_mpl
+import config
 from config import (
-    AIR_SHADE, CONDITION_COLOURS, INK_PRIMARY, INK_SECONDARY, NOM_FLOW_CORR_ML_HR,
-    NOM_FLOW_ML_HR, NOM_VOLUME_ML, NACL_FACTOR, STUDY_CONDITIONS, T_OP_DECLARED_C,
-    colour_for,
+    AIR_SHADE, INK_PRIMARY, INK_SECONDARY, NOM_FLOW_ML_HR, NOM_VOLUME_ML, NACL_FACTOR, colour_for,
 )
 
 
@@ -117,8 +116,8 @@ def plot_flow(t_h, q_raw_ml_hr, q_filt_ml_hr, band_lo, band_hi, air_intervals,
                     label=r"$\pm 5\%$ sensor uncertainty")
     ax.axhline(NOM_FLOW_ML_HR, color=INK_PRIMARY, lw=1.0, ls="--",
                label=fr"$q_{{nom}} = {NOM_FLOW_ML_HR:.0f}$ mL/hr")
-    ax.axhline(NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=1.0, ls=":",
-               label=fr"$q_{{corr}} = {NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
+    ax.axhline(config.NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=1.0, ls=":",
+               label=fr"$q_{{corr}} = {config.NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
     y_lo = min(-0.5, float(np.nanmin(band_lo)))
     y_hi = max(NOM_FLOW_ML_HR + 2.0, float(np.nanmax(band_hi)))
     _finish(fig, ax, r"Time since infusion onset (hours)", r"$q(t)$ (mL/hr)",
@@ -130,10 +129,10 @@ def plot_temperature(t_h, temp, air_intervals, out_dir, stem, colour) -> None:
     fig, ax = utils_mpl.get_fig(size=(10.0, 4.5), dpi=150)
     _shade_air(ax, air_intervals)
     ax.plot(t_h, temp, lw=1.0, color=colour, label=r"$T_{device}(t)$")
-    ax.axhline(T_OP_DECLARED_C, color=INK_PRIMARY, lw=1.0, ls="--",
-               label=fr"declared $T_{{op}} = {T_OP_DECLARED_C:.0f}$\,$^\circ$C")
+    ax.axhline(config.T_OP_DECLARED_C, color=INK_PRIMARY, lw=1.0, ls="--",
+               label=fr"declared $T_{{op}} = {config.T_OP_DECLARED_C:.0f}$\,$^\circ$C")
     finite = temp[np.isfinite(temp)]
-    lo = float(np.floor(min(finite.min(), T_OP_DECLARED_C) - 1.0))
+    lo = float(np.floor(min(finite.min(), config.T_OP_DECLARED_C) - 1.0))
     hi = float(np.ceil(finite.max() + 1.0))
     _finish(fig, ax, r"Time since infusion onset (hours)",
             r"$T(t)$ ($^\circ$C)", (float(t_h[0]), float(t_h[-1])), (lo, hi))
@@ -149,7 +148,7 @@ def plot_volume(t_h, vol_ml, vol_lo, vol_hi, vol_nominal, air_intervals,
     ax.fill_between(t_h, vol_lo, vol_hi, color=colour, alpha=0.15,
                     label=r"$\pm 5\%$ sensor uncertainty")
     ax.plot(t_h, vol_nominal, lw=1.0, ls=":", color=INK_SECONDARY,
-            label=fr"$q_{{corr}}$ nominal ({NOM_FLOW_CORR_ML_HR:.2f} mL/hr)")
+            label=fr"$q_{{corr}}$ nominal ({config.NOM_FLOW_CORR_ML_HR:.2f} mL/hr)")
     ax.axhline(NOM_VOLUME_ML, color=INK_PRIMARY, lw=1.0, ls="--",
                label=fr"$V_b(0) = {NOM_VOLUME_ML:.0f}$ mL (reservoir)")
     v_max = float(np.ceil(max(float(np.nanmax(vol_hi)), float(vol_nominal[-1]),
@@ -198,16 +197,16 @@ def plot_condition_mean(curve: dict, kind: str, out_dir: pathlib.Path,
     if kind == "flow":
         ax.axhline(NOM_FLOW_ML_HR, color=INK_PRIMARY, lw=1.0, ls="--",
                    label=fr"$q_{{nom}} = {NOM_FLOW_ML_HR:.0f}$ mL/hr")
-        ax.axhline(NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=1.0, ls=":",
-                   label=fr"$q_{{corr}} = {NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
+        ax.axhline(config.NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=1.0, ls=":",
+                   label=fr"$q_{{corr}} = {config.NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
         y_bnd = (min(-0.5, float(np.nanmin(mean - sd))),
                  max(NOM_FLOW_ML_HR + 2.0, float(np.nanmax(mean + sd))))
         y_fmt = ".1f"
     elif kind == "temperature":
         y_bnd = (float(np.floor(np.nanmin(mean - sd) - 1.0)),
                  float(np.ceil(np.nanmax(mean + sd) + 1.0)))
-        ax.axhline(T_OP_DECLARED_C, color=INK_PRIMARY, lw=1.0, ls="--",
-                   label=fr"declared $T_{{op}} = {T_OP_DECLARED_C:.0f}$\,$^\circ$C")
+        ax.axhline(config.T_OP_DECLARED_C, color=INK_PRIMARY, lw=1.0, ls="--",
+                   label=fr"declared $T_{{op}} = {config.T_OP_DECLARED_C:.0f}$\,$^\circ$C")
         y_fmt = ".1f"
     else:
         ax.axhline(NOM_VOLUME_ML, color=INK_PRIMARY, lw=1.0, ls="--",
@@ -252,7 +251,7 @@ def plot_replicate_matrix(runs: list, out_dir: pathlib.Path, ma_window_min: floa
 
     # Condition order comes from the study definition, never from discovery order:
     # a run added or removed must not reshuffle the grid.
-    order = {c: i for i, c in enumerate(STUDY_CONDITIONS)}
+    order = {c: i for i, c in enumerate(config.STUDY_CONDITIONS)}
     runs = sorted(runs, key=lambda r: (order.get(r["condition"], len(order)),
                                        r["replicate"]))
     n = len(runs)
@@ -341,10 +340,10 @@ def plot_condition_overlay(curves: dict, out_dir: pathlib.Path,
     fig, ax = utils_mpl.get_fig(size=(11.0, 5.0), dpi=150)
     ax.axhline(NOM_FLOW_ML_HR, color=INK_PRIMARY, lw=0.9, ls="--",
                label=fr"$q_{{nom}} = {NOM_FLOW_ML_HR:.0f}$ mL/hr")
-    ax.axhline(NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=0.9, ls=":",
-               label=fr"$q_{{corr}} = {NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
+    ax.axhline(config.NOM_FLOW_CORR_ML_HR, color=INK_SECONDARY, lw=0.9, ls=":",
+               label=fr"$q_{{corr}} = {config.NOM_FLOW_CORR_ML_HR:.2f}$ mL/hr")
     t_max, y_hi = 0.0, NOM_FLOW_ML_HR + 2.0
-    for cond in STUDY_CONDITIONS:
+    for cond in config.STUDY_CONDITIONS:
         c = curves.get(cond)
         if c is None:
             continue

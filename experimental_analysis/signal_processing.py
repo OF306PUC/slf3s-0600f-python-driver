@@ -28,6 +28,20 @@ from config import (
 # produces that interpolation — NaN would break the line instead.
 
 def air_mask_of(df: pd.DataFrame) -> np.ndarray:
+    """
+    Samples to treat as air in line.
+
+    Legacy files: one reading per row, so `Flag_Air` is that reading's flag.
+    Format 2: one row per 60 s window, where `Flag_Air` = 1 if ANY of its ~3000
+    readings had air — a single bubble reading would condemn a whole minute. The
+    window's flow is already the mean of its air-free readings, so a window counts
+    as air only when MOST of its readings were air (or none was air-free).
+    """
+    if "N_air" in df.columns and "N_samples" in df.columns:
+        n_air = df["N_air"].to_numpy(dtype=np.float64)
+        n = df["N_samples"].to_numpy(dtype=np.float64)
+        flow = df["Flow_ul_min"].to_numpy(dtype=np.float64)
+        return (2.0 * n_air > n) | ~np.isfinite(flow)
     return df["Flag_Air"].to_numpy(dtype=np.float64) > 0.5
 
 

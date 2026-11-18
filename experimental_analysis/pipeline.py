@@ -17,15 +17,11 @@ import figures
 import signal_processing as sp
 import stats as st
 import utils_mpl
+import config
 from config import (
-    BUBBLE_GUARD_SAMPLES, BUBBLE_MAX_PLATEAU_MIN, BUBBLE_SPIKE_FRAC,
-    BUBBLE_ZERO_FRAC,
-    MA_WINDOW_MIN, NOM_FLOW_CORR_ML_HR, NOM_VOLUME_ML, OFFSET_WINDOW_H, REL_ERROR,
-    STUDY_CONDITIONS, TEFF_FRAC_OF_NOMINAL, UL_MIN_TO_ML_HR,
-    colour_for, description_for, linestyle_for, methodology_provenance,
-    resolve_condition,
+    BUBBLE_MAX_PLATEAU_MIN, BUBBLE_SPIKE_FRAC, BUBBLE_ZERO_FRAC, MA_WINDOW_MIN, NOM_VOLUME_ML, OFFSET_WINDOW_H, REL_ERROR, TEFF_FRAC_OF_NOMINAL, UL_MIN_TO_ML_HR, colour_for, description_for, linestyle_for, methodology_provenance, resolve_condition,
 )
-from csv_io import load_csv, parse_metadata, read_footer_status
+from csv_io import format_version, load_csv, parse_metadata, read_footer_status
 
 
 class IncompleteRun(Exception):
@@ -44,6 +40,62 @@ class IncompleteRun(Exception):
         self.condition = condition
         self.replicate = replicate
         self.detail = detail or {}
+
+def _fmt_or_dash(value):
+    return "—" if value is None else f"{value:+.4f} µL/min"
+
+
+def _offset_from_sensor_table(metadata: dict, flow_raw, t_log_h, air,
+                              offset_window_h: float, air_info: dict, df,
+                              condition: str, experiment_rep: str) -> dict:
+    """
+    The zero-flow offset of the run's physical sensor, from its static zero test.
+
+    Campaign 1 measured the offset per run over the first hours, which in practice
+    is the air-filled purge — and the sensor reads a different zero with air than
+    with liquid (−0.17 to −0.61 µL/min in air against −0.13 to +0.07 with stationary
+    liquid). Campaign main measures each sensor once, filled with liquid and
+    capped (Temp/offset/), and every run on that sensor uses that value.
+
+    The per-run window is still computed when it can be, for two reasons: its
+    plausibility gate (a run already infusing when logging started), and its
+    spread, which sets the onset threshold. When the window is all air — normal
+    for format 2, where an all-air minute has no flow value — the spread falls
+    back to the static test's SD scaled to one 60 s block mean.
+    """
+    sensor = metadata.get("sensor", "")
+    table = config.sensor_offsets(config.OFFSET_TABLE)
+    if sensor not in table:
+        raise IncompleteRun(
+            f"no zero-flow offset for sensor {sensor or '(none recorded)'} in "
+            f"{config.OFFSET_TABLE.name}",
+            condition, experiment_rep, {"sensor": sensor},
+        )
+    entry = table[sensor]
+    try:
+        window = sp.offset_report(flow_raw, t_log_h, air, offset_window_h,
+                                  air_info["leading_air_end_h"])
+    except ValueError:
+        window = None
+    n_per_row = float(np.nanmedian(df["N_samples"])) if "N_samples" in df else 1.0
+    sigma_fallback = entry["sd_ul_min"] / np.sqrt(max(n_per_row, 1.0))
+    return {
+        "source": "sensor_table",
+        "sensor": sensor,
+        "table": config.OFFSET_TABLE.name,
+        "table_verdict": entry["verdict"],
+        "offset_ul_min": entry["offset_ul_min"],
+        "sigma_ul_min": (window["sigma_ul_min"]
+                         if window and window["n_samples"] > 1
+                         else round(float(sigma_fallback), 6)),
+        "window_offset_ul_min": window["offset_ul_min"] if window else None,
+        "window": window,
+        "air_fraction_in_window": window["air_fraction_in_window"] if window else None,
+        "implausible": bool(window["implausible"]) if window else False,
+        "implausible_threshold_ul_min": (window["implausible_threshold_ul_min"]
+                                         if window else None),
+    }
+
 
 def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
                  offset_window_h: float, ma_window_min: float) -> dict:
@@ -75,7 +127,11 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
             condition, experiment_rep, {"footer": footer},
         )
 
-    df = load_csv(csv_path)
+    # Format 2 = one row per 60 s window (CSV_FORMAT.md). Legacy = one row per
+    # 10 s reading. Everything below works on either; the few places that must
+    # differ test `windowed`.
+    windowed = format_version(metadata) >= 2
+    df = load_csv(csv_path, keep_air_rows=windowed)
     t = df["UTC_Time"].to_numpy(dtype=np.float64)
     t_log_h = (t - t[0]) / 3600.0
     Ts = float(np.median(np.diff(t))) if len(t) > 1 else 1.0
@@ -93,13 +149,21 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
           f"{air_info['leading_air_end_h']} h")
 
     # ── offset correction (applied to EVERY sample) ───────────────────────────
-    offs = sp.offset_report(flow_raw, t_log_h, air, offset_window_h,
-                         air_info["leading_air_end_h"])
+    if config.OFFSET_SOURCE == "sensor_table":
+        offs = _offset_from_sensor_table(metadata, flow_raw, t_log_h, air,
+                                         offset_window_h, air_info, df,
+                                         condition, experiment_rep)
+        print(f"  offset {offs['offset_ul_min']:+.4f} µL/min — sensor "
+              f"{offs['sensor']} from the static zero test "
+              f"(window over the first hours: {_fmt_or_dash(offs['window_offset_ul_min'])})")
+    else:
+        offs = sp.offset_report(flow_raw, t_log_h, air, offset_window_h,
+                             air_info["leading_air_end_h"])
+        clip = " (clipped to purge end)" if offs["window_clipped_to_purge_end"] else ""
+        print(f"  offset {offs['offset_ul_min']:+.3f} µL/min from first "
+              f"{offs['window_h']} h{clip} ({offs['n_samples']} samples, "
+              f"{100*(offs['air_fraction_in_window'] or 0):.0f}% air)")
     flow_corr = flow_raw - offs["offset_ul_min"]
-    clip = " (clipped to purge end)" if offs["window_clipped_to_purge_end"] else ""
-    print(f"  offset {offs['offset_ul_min']:+.3f} µL/min from first "
-          f"{offs['window_h']} h{clip} ({offs['n_samples']} samples, "
-          f"{100*(offs['air_fraction_in_window'] or 0):.0f}% air)")
     if offs["implausible"]:
         raise IncompleteRun(
             f"already infusing when logging started (offset "
@@ -117,7 +181,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
     # excluding bubbles there would change nothing except add a code path.
     max_plateau = max(1, int(round(BUBBLE_MAX_PLATEAU_MIN * 60.0 / Ts)))
     bubble = sp.bubble_mask(flow_corr, df, BUBBLE_SPIKE_FRAC, BUBBLE_ZERO_FRAC,
-                            BUBBLE_GUARD_SAMPLES, max_plateau)
+                            config.BUBBLE_GUARD_SAMPLES, max_plateau)
     bubble_info = sp.bubble_report(bubble, t_log_h, flow_corr, t)
     excluded = air | bubble
     if bubble_info["n_samples"]:
@@ -178,7 +242,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
     vol_ml = sp.cumulative_volume_ml(t_s, q_corr)
     vol_hi = sp.cumulative_volume_ml(t_s, q_corr + eps)
     vol_lo = sp.cumulative_volume_ml(t_s, q_corr - eps)
-    q_nom_ul_min = NOM_FLOW_CORR_ML_HR / UL_MIN_TO_ML_HR
+    q_nom_ul_min = config.NOM_FLOW_CORR_ML_HR / UL_MIN_TO_ML_HR
     vol_nominal = sp.cumulative_volume_ml(t_s, np.full(len(t_s), q_nom_ul_min))
     v_disp = float(vol_ml[-1])
 
@@ -186,7 +250,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
     # that never reaches it is incomplete by definition: the pump had not emptied
     # when logging stopped, and its profile cannot be compared end-to-end against
     # one that did.
-    teff_threshold = TEFF_FRAC_OF_NOMINAL * (NOM_FLOW_CORR_ML_HR / UL_MIN_TO_ML_HR)
+    teff_threshold = TEFF_FRAC_OF_NOMINAL * (config.NOM_FLOW_CORR_ML_HR / UL_MIN_TO_ML_HR)
     teff_s = sp.find_teff(t_s - t_s[0], q_filt, teff_threshold)
     if teff_s is None:
         raise IncompleteRun(
@@ -200,7 +264,7 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
     # ── reports ───────────────────────────────────────────────────────────────
     corr = st.cross_correlate_q_T(q_filt, temp, Ts)
     temps = st.temperature_report(temp)
-    chain = st.filter_chain_report(fs_hz, ma_window)
+    chain = st.filter_chain_report(fs_hz, ma_window, sensor_iir_active=not windowed)
 
     stats = {
         "experiment_name": experiment_name,
@@ -219,6 +283,10 @@ def process_file(csv_path: pathlib.Path, out_root: pathlib.Path,
             "logged_duration_h": round(float(t_log_h[-1]), 4),
             "n_samples_logged": int(len(df)),
             "n_samples_analysed": int(keep.sum()),
+            # Only for windowed files, so campaign-1 records keep their keys.
+            **({"format_version": format_version(metadata),
+                "readings_per_row_median": float(np.nanmedian(df["N_samples"]))}
+               if windowed else {}),
         },
         "air": air_info,
         "bubbles": bubble_info,

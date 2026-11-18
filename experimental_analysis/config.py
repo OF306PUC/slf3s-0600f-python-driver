@@ -32,16 +32,10 @@ data never appear here; they are computed per run in stats.py.
 CAMPAIGNS = ("1", "main")
 DEFAULT_CAMPAIGN = "main"
 
-# Campaign "main" — the catheter-geometry study. All first-use pumps, so no a/b suffix.
-# DUPLICATES manifests/pump-flow-main.toml, temporarily: the analysis should load
-# the manifest itself so the vocabulary has one home for both sides (B-023).
-CONDITIONS_C2 = {
-    "C0": "Sin catéter",
-    "C1": "Contiplex 40 cm (3 orificios laterales)",
-    "C2": "Contiplex 100 cm (3 orificios laterales)",
-    "C3": "Catéter peridural pediátrico (orificio terminal)",
-}
-EXPECTED_REPLICATES_C2 = {"C0": 7, "C1": 7, "C2": 7, "C3": 7}
+# Campaign "main" is NOT described here: its vocabulary (conditions, replicates)
+# is read from its experiment manifest by use_campaign() below, so the driver and
+# the analysis share ONE definition. Everything from here to "Campaign selection"
+# describes campaign 1, which predates manifests; use_campaign("1") keeps it.
 
 # The 8 conditions of the study, mirroring the driver's condition table. Kept as
 # a literal because experimental_analysis/ runs on a workstation and must not
@@ -131,7 +125,10 @@ FALLBACK_COLOUR = "#52514e"
 
 # Replicates share their condition's hue and are separated by line style, so hue
 # always means "condition" and never "which replicate".
-REP_LINESTYLES = {"rep_1": "-", "rep_2": "--", "rep_3": ":"}
+REP_LINESTYLES = {
+    "rep_1": "-", "rep_2": "--", "rep_3": ":", "rep_4": "-.",
+    "rep_5": (0, (5, 1)), "rep_6": (0, (3, 1, 1, 1, 1, 1)), "rep_7": (0, (1, 1)),
+}
 FALLBACK_LINESTYLE = "-."
 
 # Ink colours for text and guide lines — never a series colour.
@@ -268,7 +265,7 @@ SENSOR_IIR_ALPHA   = 0.0125     # exponential smoother coefficient
 SENSOR_INTERNAL_FS = 2000.0     # Hz, sensor internal sampling rate
 
 
-def corrected_nominal_flow_ml_hr(t_op_c: float = T_OP_DECLARED_C) -> float:
+def corrected_nominal_flow_ml_hr(t_op_c: float = None) -> float:
     """
     Nominal flow corrected for fluid and temperature, in mL/hr.
 
@@ -278,12 +275,17 @@ def corrected_nominal_flow_ml_hr(t_op_c: float = T_OP_DECLARED_C) -> float:
     evaluate it at both the DECLARED operating temperature and the temperature
     actually measured during the run, and report the sensitivity between them.
     """
+    if t_op_c is None:
+        # Read at call time, not as a default argument: a default is frozen when
+        # the function is defined, before use_campaign() has chosen the campaign.
+        t_op_c = T_OP_DECLARED_C
     return (
         NOM_FLOW_ML_HR * NACL_FACTOR
         * (1.0 - TEMP_CORR_PER_C * (T_NOM_C - t_op_c))
     )
 
 
+METHODOLOGY_SOURCE = "methodology.txt"
 NOM_FLOW_CORR_ML_HR = corrected_nominal_flow_ml_hr()
 
 
@@ -296,7 +298,7 @@ def methodology_provenance() -> dict:
     figure cannot drift away from the parameters that produced it.
     """
     return {
-        "source": "methodology.txt",
+        "source": METHODOLOGY_SOURCE,
         "ambient_temperature_declared_C": T_OP_DECLARED_C,
         "sensor_calibration_medium": CALIBRATION_MEDIUM,
         "fluid_excess_over_calibration": NACL_FACTOR,
@@ -333,4 +335,110 @@ def methodology_provenance() -> dict:
         ),
         "nominal_flow_ml_hr": NOM_FLOW_ML_HR,
         "corrected_nominal_flow_ml_hr_at_declared_T": round(NOM_FLOW_CORR_ML_HR, 4),
+        # Campaign-1 records keep exactly their previous keys; the ones below exist
+        # only for campaigns that need them.
+        **({"campaign": CAMPAIGN, "offset_source": OFFSET_SOURCE,
+            "offset_table": str(OFFSET_TABLE), "acquisition": ACQUISITION_TEXT}
+           if CAMPAIGN != "1" else {}),
     }
+
+
+# ── Campaign selection ───────────────────────────────────────────────────────
+# Everything above describes campaign 1. use_campaign() rebinds the values that
+# differ between campaigns. Every other module therefore reads them as
+# `config.NAME` at call time — never `from config import NAME`, which would freeze
+# the campaign-1 value at import, before the campaign is chosen.
+import pathlib as _pathlib
+import tomllib as _tomllib
+
+_HERE = _pathlib.Path(__file__).resolve().parent
+
+CAMPAIGN = "1"
+# How the zero-flow offset is obtained:
+#   "window"        measured per run over the first hours (campaign 1)
+#   "sensor_table"  one value per physical sensor, from a dedicated static test
+#                   (liquid-filled, capped sensor) — Temp/offset/offset_por_sensor.csv
+OFFSET_SOURCE = "window"
+OFFSET_TABLE = None
+ACQUISITION_TEXT = "0.1 Hz (10 s)"
+SENSOR_FILTER_TEXT = f"exponential IIR, α = {SENSOR_IIR_ALPHA}"
+SENSOR_FILTER_NOTE = "selected by the sensor because the readout rate is 0.1 Hz"
+CONDITIONS_NOTE = (
+    "What was in line for each condition code. The `a`/`b` suffix denotes **pump "
+    "reuse** — `a` a first-use pump, `b` a second-use pump — so the same "
+    "catheter is compared against itself as the pump deteriorates."
+)
+
+# Campaign "main": the vocabulary comes from its manifest. Colours follow the
+# CATHETER, not the code, so the same catheter keeps its hue across campaigns:
+# no catheter = campaign-1 C0a, Contiplex 40 = C1a, Contiplex 100 = C3,
+# paediatric = C4.
+MAIN_MANIFEST = _HERE.parent / "manifests" / "pump-flow-main.toml"
+_MAIN_COLOURS = {"C0": "#2a78d6", "C1": "#eda100", "C2": "#4a3aa7", "C3": "#e34948"}
+# The methodology document declares T_op = 23 °C for campaign main (§ q_ref);
+# campaign 1 was declared at 22 °C.
+_MAIN_T_OP_C = 23.0
+
+
+def load_manifest(path: _pathlib.Path) -> dict:
+    """Conditions and replicate counts from an experiment manifest (TOML)."""
+    with open(path, "rb") as f:
+        m = _tomllib.load(f)
+    conditions = dict(m["conditions"])
+    replicates = {c: int(m.get("replicates", {}).get(c, 0)) for c in conditions}
+    return {"conditions": conditions, "replicates": replicates,
+            "experiment": m["experiment"]["id"],
+            "campaign": str(m["experiment"]["campaign"])}
+
+
+def use_campaign(campaign: str) -> None:
+    """Select the campaign whose definitions every other module will read."""
+    global CAMPAIGN, STUDY_CONDITIONS, EXPECTED_REPLICATES, FOCUS_CONDITIONS
+    global CONDITION_DESCRIPTIONS, CONDITION_COLOURS, T_OP_DECLARED_C
+    global NOM_FLOW_CORR_ML_HR, METHODOLOGY_SOURCE, OFFSET_SOURCE, OFFSET_TABLE
+    global BUBBLE_GUARD_SAMPLES, ACQUISITION_TEXT, SENSOR_FILTER_TEXT
+    global SENSOR_FILTER_NOTE, CONDITIONS_NOTE
+    if campaign == "1":
+        return  # the module-level values above ARE campaign 1
+    if campaign != "main":
+        raise ValueError(f"unknown campaign {campaign!r}")
+    spec = load_manifest(MAIN_MANIFEST)
+    if spec["campaign"] != "main":
+        raise ValueError(f"{MAIN_MANIFEST} declares campaign {spec['campaign']!r}")
+    CAMPAIGN = "main"
+    STUDY_CONDITIONS = tuple(spec["conditions"])
+    EXPECTED_REPLICATES = spec["replicates"]
+    CONDITION_DESCRIPTIONS = spec["conditions"]
+    CONDITION_COLOURS = {c: _MAIN_COLOURS.get(c, FALLBACK_COLOUR)
+                         for c in STUDY_CONDITIONS}
+    # Every condition is first-use and the four ARE the study: a separate focus
+    # view would only repeat the full one.
+    FOCUS_CONDITIONS = ()
+    T_OP_DECLARED_C = _MAIN_T_OP_C
+    NOM_FLOW_CORR_ML_HR = corrected_nominal_flow_ml_hr()
+    METHODOLOGY_SOURCE = ("metodologia-experimental-perfil-infusion.md + "
+                          "manifests/pump-flow-main.toml")
+    OFFSET_SOURCE = "sensor_table"
+    OFFSET_TABLE = _HERE / "Temp" / "offset" / "offset_por_sensor.csv"
+    # At 50 Hz the sensor averages arithmetically and no smoothing spreads a
+    # bubble spike into neighbouring samples; and each row is a 60 s block mean,
+    # so a guard of even one row would discard a whole minute around every spike.
+    BUBBLE_GUARD_SAMPLES = 0
+    ACQUISITION_TEXT = "50 Hz readout (20 ms), one 60 s block mean per row"
+    SENSOR_FILTER_TEXT = "arithmetic mean of the internal samples"
+    SENSOR_FILTER_NOTE = ("readout interval < 100 ms, so every reading covers its "
+                          "whole interval (datasheet § 3.1)")
+    CONDITIONS_NOTE = (
+        "What was in line for each condition code. Every pump is first-use; each "
+        "tanda measures the four conditions simultaneously, one per sensor."
+    )
+
+
+def sensor_offsets(path: _pathlib.Path) -> dict:
+    """{sensor: {"offset_ul_min", "sd_ul_min", "verdict"}} from the per-sensor table."""
+    import csv
+    with open(path) as f:
+        rows = csv.DictReader(line for line in f if not line.startswith("#"))
+        return {r["sensor"]: {"offset_ul_min": float(r["offset_ul_min"]),
+                              "sd_ul_min": float(r["sd_ul_min"]),
+                              "verdict": r["verdict"]} for r in rows}
