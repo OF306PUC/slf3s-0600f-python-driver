@@ -1,9 +1,12 @@
 from data_logger import dual_logger, dry_run_communication, verify_binary
 from shdlc_driver import in_device_communication
-from utils import EndOfInfusionDetector, Logger, MeasurementRingBuffer
+from utils import FlowStopDetector, Logger, MeasurementRingBuffer
 
 import argparse
 import logging
+import os
+import pathlib
+import subprocess
 import signal
 import sys
 import core
@@ -110,6 +113,26 @@ def parse_args():
     return parser, parser.parse_args()
 
 
+def driver_commit() -> str:
+    """
+    The driver version writing this file: DRIVER_COMMIT from the image (run.sh
+    passes it at build time), else git in the source tree, else "unknown".
+    """
+    env = os.environ.get("DRIVER_COMMIT", "").strip()
+    if env and env != "unknown":
+        return env
+    here = pathlib.Path(__file__).resolve().parent
+    try:
+        commit = subprocess.run(["git", "-C", str(here), "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=5,
+                                check=True).stdout.strip()
+        dirty = subprocess.run(["git", "-C", str(here), "status", "--porcelain", "--", "."],
+                               capture_output=True, text=True, timeout=5).stdout.strip()
+        return commit + ("-dirty" if dirty else "")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+
 def main():
     _setup_logging()
     parser, args = parse_args()
@@ -179,6 +202,7 @@ def main():
         "f_ro_hz":            round(1000.0 / sampling_interval_ms, 4),
         "sampling_ms":        sampling_interval_ms,
         "end_of_infusion":    "off" if args.no_end_of_infusion else "on",
+        "driver_commit":      driver_commit(),
         "fields":             dict(sorted(fields.items())),
     }
 
@@ -193,10 +217,10 @@ def main():
         sys.exit(0)
 
     queue_process = queue_module.Queue(maxsize=core.QUEUE_MAXSIZE)
-    detector = None if args.no_end_of_infusion else EndOfInfusionDetector(
-        window_size=core.EoI_WINDOW_SIZE,
-        hold_sec=core.EoI_HOLD_SEC,
-        rms_flow_ulmin_threshold=core.EoI_RMS_FLOW_ULMIN_THRESHOLD,
+    detector = None if args.no_end_of_infusion else FlowStopDetector(
+        window_size=core.FLOW_STOP_WINDOW_SIZE,
+        hold_sec=core.FLOW_STOP_HOLD_SEC,
+        rms_flow_ulmin_threshold=core.FLOW_STOP_RMS_ULMIN,
     )
     logger = Logger(path=core.LOGGER_PATH)
     ring_buffer = MeasurementRingBuffer(max_size=core.BUFF_QUEUE_MAXSIZE)

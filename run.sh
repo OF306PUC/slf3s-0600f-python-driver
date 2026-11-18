@@ -39,8 +39,12 @@ if [ -z "${MANIFEST:-}" ]; then
     echo "       any study (recorded as such, nothing validated)." >&2
     exit 1
 fi
-if [ "$MANIFEST" != "none" ] && [ ! -f "manifests/$MANIFEST" ]; then
-    echo "ERROR: manifests/$MANIFEST not found." >&2
+# MANIFESTS_DIR: where the experiment manifests live. Default: manifests/ next to
+# this script. A study repository that carries the driver as a submodule points
+# it at its own manifests (MANIFESTS_DIR=../manifests).
+MANIFESTS_DIR="$(cd "$(dirname "$0")" && cd "${MANIFESTS_DIR:-manifests}" 2>/dev/null && pwd || echo "${MANIFESTS_DIR:-manifests}")"
+if [ "$MANIFEST" != "none" ] && [ ! -f "$MANIFESTS_DIR/$MANIFEST" ]; then
+    echo "ERROR: $MANIFESTS_DIR/$MANIFEST not found." >&2
     exit 1
 fi
 if [ ! -e "$DEVICE" ]; then
@@ -52,7 +56,17 @@ fi
 mkdir -p data logs
 
 # ── build ─────────────────────────────────────────────────────────────────────
-docker build -t "$IMAGE" .
+# The driver version, recorded in every data file (header key driver_commit).
+# "-dirty" when the driver's own files differ from that commit, so a file can
+# never claim a version it was not written by.
+DRIVER_DIR="$(cd "$(dirname "$0")" && pwd)"
+DRIVER_COMMIT="$(git -C "$DRIVER_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ "$DRIVER_COMMIT" != "unknown" ] && \
+   [ -n "$(git -C "$DRIVER_DIR" status --porcelain -- slf3s Dockerfile 2>/dev/null)" ]; then
+    DRIVER_COMMIT="${DRIVER_COMMIT}-dirty"
+fi
+echo "── driver ${DRIVER_COMMIT} ──"
+docker build --build-arg DRIVER_COMMIT="$DRIVER_COMMIT" -t "$IMAGE" "$DRIVER_DIR"
 
 # ── arguments shared by the check and the real launch ─────────────────────────
 ARGS=(
@@ -79,7 +93,7 @@ if [ "${END_OF_INFUSION:-on}" = "off" ]; then ARGS+=(--no-end-of-infusion); fi
 
 # Manifests are MOUNTED, not baked into the image: editing one or adding a new
 # experiment must not require a rebuild.
-MANIFEST_MOUNT=(-v "$(pwd)/manifests:/app/manifests:ro")
+MANIFEST_MOUNT=(-v "$MANIFESTS_DIR:/app/manifests:ro")
 
 # ── validate in the foreground FIRST ──────────────────────────────────────────
 # The real launch below is detached and --rm. If the logger rejected its

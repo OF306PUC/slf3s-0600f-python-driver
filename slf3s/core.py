@@ -37,10 +37,10 @@ MIN_TO_SEC = (1.0 / 60.0)
 # End of infusion detector params:
 # The window is defined in SECONDS so it keeps the time span it had when it was
 # tuned (100 samples × 10 s = 1000 s) regardless of the readout rate.
-EoI_WINDOW_S = 1000
-EoI_WINDOW_SIZE = int(EoI_WINDOW_S * 1000 // SAMPLING_INTERVAL)  # samples
-EoI_HOLD_SEC = 300                   # Hold time in seconds (5 min.)
-EoI_RMS_FLOW_ULMIN_THRESHOLD = 0.09  # uL/min (Empirical threshold for RMS flow rate to consider "near zero" flow)
+FLOW_STOP_WINDOW_S = 1000
+FLOW_STOP_WINDOW_SIZE = int(FLOW_STOP_WINDOW_S * 1000 // SAMPLING_INTERVAL)  # samples
+FLOW_STOP_HOLD_SEC = 300                   # Hold time in seconds (5 min.)
+FLOW_STOP_RMS_ULMIN = 0.09  # uL/min (Empirical threshold for RMS flow rate to consider "near zero" flow)
 
 # >  big-endian
 # d  float64 timestamp

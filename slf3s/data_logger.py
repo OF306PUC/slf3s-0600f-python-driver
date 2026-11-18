@@ -63,6 +63,7 @@ def _write_csv_metadata(f, metadata: dict, start_utc: str) -> None:
         ("manifest",           metadata.get("manifest", "none")),
         ("manifest_sha256",    metadata.get("manifest_sha256", "none")),
         ("end_of_infusion",    metadata.get("end_of_infusion", "on")),
+        ("driver_commit",      metadata.get("driver_commit", "unknown")),
     ]
 
     fields = sorted((metadata.get("fields") or {}).items())
@@ -182,7 +183,7 @@ def dual_logger(
     csv_filename: str,
     bin_filename: str,
     queue,
-    end_of_infusion_detector,
+    flow_stop_detector,
     logger,
     stop_event,
     sampling_interval: int = core.SAMPLING_INTERVAL,
@@ -201,7 +202,7 @@ def dual_logger(
         csv_filename: CSV output filename, placed inside core.DATA_DIR.
         bin_filename: Binary output filename, placed inside core.DATA_DIR.
         queue: threading.Queue of (timestamp, flow_raw, temp_raw, flags_raw).
-        end_of_infusion_detector: EndOfInfusionDetector instance.
+        flow_stop_detector: FlowStopDetector instance.
         logger: Logger instance for error/info logging.
         stop_event: threading.Event; logger stops when set and queue is empty.
         sampling_interval: Sampling interval in milliseconds.
@@ -257,11 +258,11 @@ def dual_logger(
                 flow_raw_s = core.u16_to_i16(flow_raw)
                 temp_raw_s = core.u16_to_i16(temp_raw)
 
-                if end_of_infusion_detector is not None and end_of_infusion_detector.update(
+                if flow_stop_detector is not None and flow_stop_detector.update(
                     timestamp=timestamp, flow_ulmin=flow_ul_min
                 ):
                     logger.log(
-                        f"End-of-infusion detected. "
+                        f"Flow stop detected (end of infusion). "
                         f"start_utc={start_utc}, volume_uL={aggregator.volume_ul:.2f}",
                         context={"integrated_volume_uL": aggregator.volume_ul},
                     )

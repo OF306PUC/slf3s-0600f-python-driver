@@ -55,10 +55,12 @@ class Logger:
                 f.write(f"    CONTEXT: {context}\n")
 
 
-class EndOfInfusionDetector:
+class FlowStopDetector:
     """
-    Flags the end of an infusion: the RMS of the flow over a sliding window stays
-    below a threshold for `hold_sec`.
+    Flags a flow stop: the RMS of the flow over a sliding window stays below a
+    threshold for `hold_sec`. Generic — in the pump study it marks the end of an
+    infusion, hence the CLI flag --no-end-of-infusion and the header key
+    `end_of_infusion`, kept for compatibility with existing launch files.
 
     The sum of squares is kept as a running total so each update is O(1). That
     matters at 10 Hz: the window spans 1000 s, i.e. 10 000 readings, and summing
