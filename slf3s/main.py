@@ -85,7 +85,7 @@ def parse_args():
     parser.add_argument("--experiment-rep", type=str, default="UNKNOWN",
         help="Replicate identifier: rep_1, rep_2, …")
     parser.add_argument("--meta", action="append", default=[], metavar="KEY=VALUE",
-        help="Per-run field, repeatable (e.g. --meta pump_lot=A-07). Which keys\n"
+        help="Per-run field, repeatable (e.g. --meta sensor=SEN1). Which keys\n"
              "are required is declared by the manifest.")
     parser.add_argument("--pump-lot", type=str, default=None,
         help="Shorthand for --meta pump_lot=VALUE")

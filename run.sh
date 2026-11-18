@@ -35,7 +35,7 @@ fi
 # visible choice for a measurement that belongs to no study.
 if [ -z "${MANIFEST:-}" ]; then
     echo "ERROR: set MANIFEST in .env — a file under manifests/ (e.g." >&2
-    echo "       MANIFEST=pump-flow-main.toml), or MANIFEST=none for a run outside" >&2
+    echo "       MANIFEST=example-sensor-zero.toml), or MANIFEST=none for a run outside" >&2
     echo "       any study (recorded as such, nothing validated)." >&2
     exit 1
 fi

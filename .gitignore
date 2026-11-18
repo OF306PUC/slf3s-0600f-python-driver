@@ -16,22 +16,17 @@ logs/
 slf3s/Temp/
 slf3s/Logs/
 
-# Analysis outputs
-results/
-experimental_analysis/results/
-
-# Experimental data — kept locally for analysis, never published to this repo
-experimental_analysis/Temp/*
-!experimental_analysis/Temp/.gitkeep
-
-# Keep lab photos out of the public repo — experiment_notes/ holds text notes only
-experiment_notes/**/*.jpg
-experiment_notes/**/*.jpeg
-experiment_notes/**/*.png
-experiment_notes/**/*.heic
-
-# Personal documents
+# The pump study moved to its own repository (elastomeric-pump-flow-study),
+# which includes this driver as a submodule. Whatever of it is still on disk in
+# an older checkout — data, results, notes, documents — stays out of here.
+experimental_analysis/
+experiment_notes/
+camera/
+ambient-temp-meas/
 docs_liquid_flowmeter/
+results/
+metodologia-*.md
+.vscode/
 
 # ── AI tooling and its documentation: LOCAL ONLY, never committed ─────────────
 # This repo publishes the driver and the analysis, not the assistant scaffolding
@@ -47,15 +42,13 @@ docs_liquid_flowmeter/
 # clone. The living documentation has no git history, so `.studio/` existing on disk
 # IS its only copy — back it up separately if it matters.
 #
-# The reproducibility-critical part is unaffected: every declared methodology
-# parameter lives in experimental_analysis/config.py, which IS committed, and each
-# run's stats.json embeds it.
+# The reproducibility-critical part is unaffected: what each run was launched
+# with is in its manifest and in the self-describing header of every data file.
 .claude/
 .studio/
 /CLAUDE.md
 
 # Experimental methodology notes — local only, by request.
-# Mirrored (with rationale) in experimental_analysis/config.py, which is committed.
 methodology.txt
 
 # Credentials / local overrides (CLAUDE.md § Data Protection §5)

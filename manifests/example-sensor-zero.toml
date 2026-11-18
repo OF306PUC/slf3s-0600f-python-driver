@@ -1,0 +1,39 @@
+# Example manifest — a minimal, real experiment: the zero-flow offset of each
+# sensor. The sensor is filled with liquid, capped at both ends, and logged for
+# at least an hour; whatever it reads is its offset (see slf3s/offset_report.py).
+#
+# Launch (environment file next to run.sh):
+#   MANIFEST=example-sensor-zero.toml
+#   CONFIG=ZERO
+#   EXPERIMENT_REP=rep_1
+#   META="sensor=SEN1"
+#   END_OF_INFUSION=off        # zero flow IS the measurement: do not stop on it
+#   HOURS=2
+# then ./run.sh. Check a run without opening the serial port:
+#   cd slf3s && python3 main.py --check --manifest ../manifests/example-sensor-zero.toml \
+#       --configuration ZERO --experiment-rep rep_1 --meta sensor=SEN1
+#
+# Every option is explained in TEMPLATE.toml.
+
+schema = 1
+
+[experiment]
+id = "sensor-zero"
+campaign = 1
+title = "Zero-flow offset of each sensor (liquid-filled, capped)"
+status = "open"
+
+[conditions]
+ZERO = "Sensor filled with liquid, both ends capped, no flow"
+
+[replicates]
+ZERO = 1
+
+[fields]
+required = ["sensor"]
+
+[fields.defaults]
+fluid = "water"
+
+[fields.patterns]
+sensor = "^SEN[0-9]+$"
