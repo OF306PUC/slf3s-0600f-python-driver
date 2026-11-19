@@ -60,7 +60,7 @@ refuse an unknown version before interpreting anything else.
 | 13 | `hostname` | `lab-pi8` | `socket.gethostname()` | The machine's real hostname |
 | 14 | `manifest` | `pump-flow-main.toml` | `--manifest` | Manifest file name; `none` without one |
 | 15 | `manifest_sha256` | `0e3540…` | computed | SHA-256 of the manifest bytes, so a run can be tied to the exact vocabulary it was launched under |
-| 16 | `end_of_infusion` | `on` | `--no-end-of-infusion` | `on`: the run stops when the flow stays near zero (end of the infusion). `off`: it runs for the full duration — static tests such as the sensor offset. Absent in files written before 2026-10-07 (read as `on`) |
+| 16 | `end_of_infusion` | `on` | `--no-end-of-infusion` | `on`: the run stops at the end of the flow — after 3 h of sustained flow (≥ 10 µL/min), when the mean flow over 1000 s stays below 1 µL/min for 300 s (before driver 2026-11-19: RMS below 0.09 µL/min, no arming). `off`: it runs for the full duration — static tests such as the sensor offset. Absent in files written before 2026-10-07 (read as `on`) |
 | 17 | `driver_commit` | `3bc87e1` | image build / git | Driver version that wrote the file (`git rev-parse --short HEAD`); `-dirty` if the driver's files differed from that commit; `unknown` if it could not be determined. Absent before 2026-11-18 |
 
 ### 1b. Run fields

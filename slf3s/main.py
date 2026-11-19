@@ -226,7 +226,9 @@ def main():
     detector = None if args.no_end_of_infusion else FlowStopDetector(
         window_size=core.FLOW_STOP_WINDOW_SIZE,
         hold_sec=core.FLOW_STOP_HOLD_SEC,
-        rms_flow_ulmin_threshold=core.FLOW_STOP_RMS_ULMIN,
+        mean_flow_ulmin_threshold=core.FLOW_STOP_MEAN_ULMIN,
+        arm_flow_ulmin=core.FLOW_STOP_ARM_ULMIN,
+        arm_minutes=core.FLOW_STOP_ARM_MINUTES,
     )
     logger = Logger(path=core.LOGGER_PATH)
     ring_buffer = MeasurementRingBuffer(max_size=core.BUFF_QUEUE_MAXSIZE)

@@ -57,52 +57,99 @@ class Logger:
 
 class FlowStopDetector:
     """
-    Flags a flow stop: the RMS of the flow over a sliding window stays below a
+    Flags the end of a flow: once the flow has been SUSTAINED for a while
+    (armed), it fires when the mean flow over a sliding window stays below a
     threshold for `hold_sec`. Generic — in the pump study it marks the end of an
     infusion, hence the CLI flag --no-end-of-infusion and the header key
-    `end_of_infusion`, kept for compatibility with existing launch files.
+    `end_of_infusion`.
 
-    The sum of squares is kept as a running total so each update is O(1). That
-    matters at 10 Hz: the window spans 1000 s, i.e. 10 000 readings, and summing
-    them on every reading would cost ~10^5 operations per second for nothing.
+    Arming exists because a run can legitimately sit at zero flow BEFORE its flow
+    starts: a dry recording with the sensor full of air, or a line filled and
+    then capped for an hour to check the sensor's zero. Without arming, either
+    would end the run before it began. The detector arms after `arm_minutes`
+    CONSECUTIVE one-minute blocks whose mean non-air flow is ≥ `arm_flow_ulmin`.
+    A minute made only of air readings neither counts nor resets the streak (a
+    bubble crossing the sensor is not the flow stopping); a minute with liquid
+    below the threshold resets it — a filled-then-capped line never arms.
+
+    Once armed, air readings count as zero flow (no liquid is being delivered),
+    and the criterion is the MEAN, not the RMS: a liquid-filled sensor at rest
+    reads its offset (≈ −0.1 µL/min), so an RMS threshold below |offset| may
+    never fire, and one above it depends on each sensor's offset.
+
+    Running sums keep each update O(1): the window spans 1000 s, i.e. 50 000
+    readings at 50 Hz. The sum is recomputed once per window to bound
+    floating-point drift over a multi-day run.
     """
-    def __init__(self, window_size=100, hold_sec=60,
-                 rms_flow_ulmin_threshold=0.05):
+    def __init__(self, window_size, hold_sec, mean_flow_ulmin_threshold,
+                 arm_flow_ulmin, arm_minutes):
         self._window_size = int(window_size)
         self._hold_sec = float(hold_sec)
-        self._rms_threshold = float(rms_flow_ulmin_threshold)
+        self._threshold = float(mean_flow_ulmin_threshold)
+        self._arm_flow = float(arm_flow_ulmin)
+        self._arm_minutes = int(arm_minutes)
 
         self._flow_buffer = deque()
-        self._sum_sq = 0.0
-        self._last_non_zero_time = None
+        self._sum = 0.0
+        self._since_resum = 0
+        self._below_since = None
 
-    def update(self, timestamp, flow_ulmin) -> bool:
+        self.armed = False
+        self.armed_at = None
+        self._streak = 0                  # consecutive qualifying minutes
+        self._block_start = None
+        self._block_sum = 0.0
+        self._block_n = 0                 # non-air readings in the block
+
+    def _close_block(self) -> None:
+        if self._block_n == 0:
+            return                        # air only: neither counts nor resets
+        if self._block_sum / self._block_n >= self._arm_flow:
+            self._streak += 1
+        else:
+            self._streak = 0
+
+    def update(self, timestamp, flow_ulmin, air=False) -> bool:
         """
-        Returns True if end-of-infusion is detected.
+        Feed one reading. Returns True when the end of the flow is detected.
 
-        :param flow_ulmin: Current flow in uL/min.
+        :param flow_ulmin: flow in µL/min as read (not offset-corrected).
+        :param air: the reading's air-in-line flag.
         """
         f = float(flow_ulmin)
-        self._flow_buffer.append(f)
-        self._sum_sq += f * f
-        if len(self._flow_buffer) > self._window_size:
-            old = self._flow_buffer.popleft()
-            self._sum_sq -= old * old
 
-        if len(self._flow_buffer) < self._window_size:
-            self._last_non_zero_time = None
+        # ── arming: one-minute blocks of non-air readings ──
+        if not self.armed:
+            if self._block_start is None:
+                self._block_start = timestamp
+            elif timestamp - self._block_start >= 60.0:
+                self._close_block()
+                self._block_start, self._block_sum, self._block_n = timestamp, 0.0, 0
+                if self._streak >= self._arm_minutes:
+                    self.armed, self.armed_at = True, timestamp
+            if not air:
+                self._block_sum += f
+                self._block_n += 1
+
+        # ── sliding window of delivered flow (air = nothing delivered) ──
+        v = 0.0 if air else f
+        self._flow_buffer.append(v)
+        self._sum += v
+        if len(self._flow_buffer) > self._window_size:
+            self._sum -= self._flow_buffer.popleft()
+        self._since_resum += 1
+        if self._since_resum >= self._window_size:
+            self._sum, self._since_resum = sum(self._flow_buffer), 0
+
+        if not self.armed or len(self._flow_buffer) < self._window_size:
+            self._below_since = None
             return False
 
-        # max(…, 0): the running subtraction can leave a tiny negative residue.
-        rms = (max(self._sum_sq, 0.0) / len(self._flow_buffer)) ** 0.5
-        near_zero = (rms < self._rms_threshold)
-
-        if near_zero:
-            if self._last_non_zero_time is None:
-                self._last_non_zero_time = timestamp
-            elif (timestamp - self._last_non_zero_time) >= self._hold_sec:
+        if self._sum / len(self._flow_buffer) < self._threshold:
+            if self._below_since is None:
+                self._below_since = timestamp
+            elif timestamp - self._below_since >= self._hold_sec:
                 return True
         else:
-            self._last_non_zero_time = None
-
+            self._below_since = None
         return False

@@ -28,8 +28,12 @@ which includes this repository as a git submodule.
 - **Validates a run before starting it** against an experiment manifest (TOML):
   allowed conditions, required per-run fields and their patterns, design rules
   and an optional run plan. A run that does not fit is refused.
-- Optionally stops on its own when the flow stays near zero (end of an infusion,
-  end of a pumped volume); `END_OF_INFUSION=off` disables that for static tests.
+- Optionally stops on its own at the end of the flow (end of an infusion, end of
+  a pumped volume): once the flow has been sustained for 3 h (≥ 10 µL/min), the
+  run ends when the mean flow over the last 1000 s stays below 1 µL/min for 5 min.
+  The 3 h arming lets a run start before its flow does — a dry recording, or a
+  line filled and capped for a zero check — without being cut.
+  `END_OF_INFUSION=off` disables it for static tests.
 
 ## Hardware
 
@@ -70,7 +74,7 @@ It is a **Docker container** (`slf3s-logger`), not a system service:
 | Start | `./run.sh` (validate → build → `docker run -d`) |
 | Running? | `docker ps` · `docker logs -f slf3s-logger` · `tail -2 data/<RUN>.csv` |
 | Stop by hand | `docker stop slf3s-logger` |
-| Stops by itself | flow near zero for ~20 min (unless `END_OF_INFUSION=off`), or `HOURS` |
+| Stops by itself | ~20 min after the flow stops, once it has run 3 h (unless `END_OF_INFUSION=off`), or `HOURS` |
 | After a reboot / power cut | **not restarted** — on purpose: relaunching with the same `CONFIG`/`EXPERIMENT_REP` would overwrite the run's files. Relaunch under a new replicate name. |
 | Verify a finished run | `python3 slf3s/check_readout.py data/<RUN>.bin` → PASS, and footer `coverage` ≥ 0.99 |
 

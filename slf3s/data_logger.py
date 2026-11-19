@@ -258,15 +258,29 @@ def dual_logger(
                 flow_raw_s = core.u16_to_i16(flow_raw)
                 temp_raw_s = core.u16_to_i16(temp_raw)
 
+                was_armed = flow_stop_detector is not None and flow_stop_detector.armed
                 if flow_stop_detector is not None and flow_stop_detector.update(
-                    timestamp=timestamp, flow_ulmin=flow_ul_min
+                    timestamp=timestamp, flow_ulmin=flow_ul_min, air=bool(flag_air)
                 ):
                     logger.log(
                         f"Flow stop detected (end of infusion). "
                         f"start_utc={start_utc}, volume_uL={aggregator.volume_ul:.2f}",
                         context={"integrated_volume_uL": aggregator.volume_ul},
                     )
+                    log.info("Flow stop detected (end of infusion) — closing the run. "
+                             "volume_uL=%.2f", aggregator.volume_ul)
                     stop_event.set()
+                if (flow_stop_detector is not None and not was_armed
+                        and flow_stop_detector.armed):
+                    logger.log(
+                        f"End-of-infusion detector armed: "
+                        f"{core.FLOW_STOP_ARM_MINUTES} min of sustained flow "
+                        f"(≥ {core.FLOW_STOP_ARM_ULMIN} µL/min)",
+                        context={"integrated_volume_uL": aggregator.volume_ul},
+                    )
+                    log.info("End-of-infusion detector armed after %d min of "
+                             "sustained flow (>= %.1f uL/min)",
+                             core.FLOW_STOP_ARM_MINUTES, core.FLOW_STOP_ARM_ULMIN)
 
                 row = aggregator.add(timestamp, flow_ul_min, temp_c,
                                      flag_air, flag_high_flow, exp_smoothing)

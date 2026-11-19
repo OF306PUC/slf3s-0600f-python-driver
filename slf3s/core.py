@@ -40,7 +40,15 @@ MIN_TO_SEC = (1.0 / 60.0)
 FLOW_STOP_WINDOW_S = 1000
 FLOW_STOP_WINDOW_SIZE = int(FLOW_STOP_WINDOW_S * 1000 // SAMPLING_INTERVAL)  # samples
 FLOW_STOP_HOLD_SEC = 300                   # Hold time in seconds (5 min.)
-FLOW_STOP_RMS_ULMIN = 0.09  # uL/min (Empirical threshold for RMS flow rate to consider "near zero" flow)
+# Stop: mean delivered flow over the window below this (µL/min). Well above any
+# sensor offset (|offset| ≈ 0.10–0.13) and ~1 % of an elastomeric pump's nominal
+# flow (5 mL/h ≈ 83 µL/min), so the residual volume after it is negligible.
+FLOW_STOP_MEAN_ULMIN = 1.0
+# Arming: the detector only runs after this many consecutive minutes with mean
+# non-air flow ≥ FLOW_STOP_ARM_ULMIN — so a dry recording, or a line filled and
+# capped for a zero check, cannot end the run before its flow starts.
+FLOW_STOP_ARM_ULMIN = 10.0
+FLOW_STOP_ARM_MINUTES = 180                # 3 h
 
 # >  big-endian
 # d  float64 timestamp
