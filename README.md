@@ -44,13 +44,17 @@ which includes this repository as a git submodule.
 git clone https://github.com/OF306PUC/slf3s-0600f-python-driver.git
 cd slf3s-0600f-python-driver
 cp .env.template .env      # edit: manifest, condition, replicate, fields
+./run.sh --check           # validate only: nothing is started
 ./run.sh                   # validates, builds, launches detached
 docker logs -f slf3s-logger
 ```
 
 `run.sh` first runs the logger with `--check` in the foreground — a rejected run
 stops there with the reason — and then launches the container detached, so the
-run survives the SSH session. Data land in `./data/`, logs in `./logs/`.
+run survives the SSH session. `./run.sh --check` stops after that validation, so
+every host can be checked before anything is connected. Both refuse a run whose
+files already exist in `data/` (it would overwrite them) or while another run is
+active. Data land in `./data/`, logs in `./logs/`.
 `docker stop slf3s-logger` ends a run cleanly (footer `status=INTERRUPTED`).
 
 The serial port defaults to the single entry under `/dev/serial/by-id/`, a name
@@ -62,6 +66,7 @@ It is a **Docker container** (`slf3s-logger`), not a system service:
 
 | | |
 |---|---|
+| Check only | `./run.sh --check` (validate, launch nothing) |
 | Start | `./run.sh` (validate → build → `docker run -d`) |
 | Running? | `docker ps` · `docker logs -f slf3s-logger` · `tail -2 data/<RUN>.csv` |
 | Stop by hand | `docker stop slf3s-logger` |
@@ -84,6 +89,10 @@ cd slf3s
 python3 main.py --check --manifest ../manifests/example-sensor-zero.toml \
     --configuration ZERO --experiment-rep rep_1 --meta sensor=SEN1
 ```
+
+A manifest can also tie each instrument to the USB adapter it is read through
+(`[adapters]`): a run declaring `sensor=SEN2` on a host whose cable is another
+sensor's is refused — the classic launch file copied from the wrong host.
 
 `MANIFEST=none` launches a run outside any experiment: nothing is validated and
 the header says so. A project that keeps its manifests elsewhere sets

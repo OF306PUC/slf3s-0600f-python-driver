@@ -45,10 +45,20 @@ RESERVED_FIELDS = frozenset({
 PLACEHOLDERS = frozenset({"", "unknown", "none", "n/a", "na", "tbd", "todo", "-"})
 
 _TOP_LEVEL = {"schema", "experiment", "conditions", "replicates", "fields",
-              "plan", "constraints"}
+              "plan", "constraints", "adapters"}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _REPLICATE = re.compile(r"^rep_([1-9][0-9]*)$")
 _FIELD_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
+_ADAPTER_SERIAL = re.compile(r"^[A-Za-z0-9]+$")
+# The serial number inside a /dev/serial/by-id/ name, e.g.
+#   usb-Sensirion_AG_Sensirion_RS485-USB_Cable_FTAGHLMF-if00-port0 -> FTAGHLMF
+_BY_ID_SERIAL = re.compile(r"_([A-Za-z0-9]+)-if[0-9]+(?:-port[0-9]+)?$")
+
+
+def adapter_serial(port: str):
+    """The USB adapter serial named by a /dev/serial/by-id/ path, or None."""
+    m = _BY_ID_SERIAL.search(pathlib.PurePosixPath(port or "").name)
+    return m.group(1) if m else None
 
 
 class ManifestError(ValueError):
@@ -69,14 +79,20 @@ class Manifest:
     defaults: dict            # field name -> value used when not supplied
     patterns: dict            # field name -> compiled regex the value must match
     plan: dict                # condition -> replicate -> {field: value} it MUST run with
+    adapters: dict            # field -> {value: USB adapter serial it is read through}
 
-    def resolve_run(self, condition: str, replicate: str, supplied: dict) -> dict:
+    def resolve_run(self, condition: str, replicate: str, supplied: dict,
+                    port: str = None) -> dict:
         """
         Check one run against this manifest and return its per-run fields.
 
         Returns the fields to record (defaults overlaid by what the operator
         supplied). Raises ManifestError naming every problem at once, so a
         misconfigured launch is fixed in one round trip instead of one per error.
+
+        `port` is the serial port the run will read. When the manifest has an
+        [adapters] section it is checked against it; None (a dry run, no
+        hardware) skips that check.
         """
         problems = []
         if self.status != "open":
@@ -103,6 +119,8 @@ class Manifest:
                 problems.append(f"field {name!r}={value!r} does not match the "
                                 f"pattern {rx.pattern!r} declared in the manifest")
         problems += self._check_plan(condition, replicate, fields)
+        if port is not None:
+            problems += self._check_adapters(fields, port)
         if problems:
             raise ManifestError(
                 f"run rejected by {self.path.name}:\n  - " + "\n  - ".join(problems))
@@ -139,6 +157,40 @@ class Manifest:
                 f"it replaces ({target}), got {k}={fields.get(k)!r}"
                 for k, v in cond_plan[target].items()
                 if k != "tanda" and str(fields.get(k)) != v]
+
+    def _check_adapters(self, fields: dict, port: str) -> list:
+        """
+        Hold the run to the manifest's [adapters] map, if it has one.
+
+        A run declares which instrument it measures with (e.g. sensor=SEN2), and
+        the plan holds that value to the condition — but nothing ties it to the
+        cable actually plugged into this host. A launch file copied from another
+        host passes every other check and files a run under the wrong sensor.
+        The USB adapter's serial number, which /dev/serial/by-id/ names, is that
+        tie. It identifies the CABLE: it stands for the instrument only as long
+        as each instrument stays on its own cable.
+        """
+        problems = []
+        actual = adapter_serial(port)
+        for name, table in self.adapters.items():
+            value = fields.get(name)
+            expected = table.get(str(value))
+            if expected is None:
+                problems.append(f"[adapters.{name}] declares no adapter for "
+                                f"{name}={value!r} (declared: {', '.join(table)})")
+            elif actual is None:
+                problems.append(f"port {port!r} does not name its USB adapter, so "
+                                f"{name}={value!r} cannot be checked against "
+                                f"[adapters.{name}]: use its /dev/serial/by-id/ path")
+            elif actual != expected:
+                owner = next((v for v, s in table.items() if s == actual), None)
+                problems.append(
+                    f"{name}={value!r} is read through adapter {expected}, but this "
+                    f"host's port is adapter {actual}"
+                    + (f" — the one declared for {name}={owner!r}" if owner else
+                       " — not declared in the manifest")
+                    + ". Is the launch file from another host?")
+        return problems
 
     def planned_replicates(self, condition: str):
         return self.replicates.get(condition)
@@ -224,6 +276,8 @@ def load(path) -> Manifest:
     plan = _load_plan(doc.get("plan", {}), path, conditions, required, defaults,
                       patterns)
     _check_constraints(doc.get("constraints", {}), path, plan)
+    adapters = _load_adapters(doc.get("adapters", {}), path,
+                              set(required) | set(defaults) | set(patterns))
 
     return Manifest(
         path=path,
@@ -238,7 +292,28 @@ def load(path) -> Manifest:
         defaults={k: str(v) for k, v in defaults.items()},
         patterns=patterns,
         plan=plan,
+        adapters=adapters,
     )
+
+
+def _load_adapters(raw, path, declared) -> dict:
+    """[adapters.<field>] value = "SERIAL" — which USB adapter reads each value."""
+    _require(isinstance(raw, dict), path, "[adapters] must be a table")
+    out = {}
+    for name, table in raw.items():
+        _require(name in declared, path, f"[adapters.{name}]: {name!r} is not a "
+                 f"declared field (required/defaults/patterns)")
+        _require(isinstance(table, dict) and table, path,
+                 f"[adapters.{name}] must map each value to an adapter serial")
+        for value, serial in table.items():
+            _require(isinstance(serial, str) and bool(_ADAPTER_SERIAL.match(serial)),
+                     path, f"[adapters.{name}].{value} must be an adapter serial "
+                     f"such as \"FTAGHLMF\" (got {serial!r})")
+        serials = list(table.values())
+        _require(len(set(serials)) == len(serials), path,
+                 f"[adapters.{name}] gives the same adapter to two values")
+        out[name] = {str(k): v for k, v in table.items()}
+    return out
 
 
 def _load_plan(raw, path, conditions, required, defaults, patterns) -> dict:

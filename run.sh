@@ -1,6 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 
+#   ./run.sh           validate the run, then launch it detached
+#   ./run.sh --check   validate only: everything the launch checks, nothing started
+CHECK_ONLY=0
+case "${1:-}" in
+    "")       ;;
+    --check)  CHECK_ONLY=1 ;;
+    *)        echo "usage: $0 [--check]" >&2; exit 2 ;;
+esac
+
 # ── load experiment parameters ────────────────────────────────────────────────
 if [ -f .env ]; then
     set -a
@@ -55,6 +64,21 @@ fi
 # ── host-side output directories ──────────────────────────────────────────────
 mkdir -p data logs
 
+# A run's files are named <CONFIG>_<EXPERIMENT_REP>; launching the same pair again
+# would overwrite a finished run. A repeated run gets a new replicate instead.
+for f in "data/${CONFIG:-UNKNOWN}_${EXPERIMENT_REP:-UNKNOWN}".{csv,bin}; do
+    if [ -e "$f" ]; then
+        echo "ERROR: $f already exists — this run was already launched on this host." >&2
+        echo "       A repeated run is a new replicate (EXPERIMENT_REP); move the old" >&2
+        echo "       files away only if they are truly to be discarded." >&2
+        exit 1
+    fi
+done
+if [ -n "$(docker ps -q --filter name='^slf3s-logger$')" ]; then
+    echo "ERROR: a run is already active on this host (docker ps: slf3s-logger)." >&2
+    exit 1
+fi
+
 # ── build ─────────────────────────────────────────────────────────────────────
 # The driver version, recorded in every data file (header key driver_commit).
 # "-dirty" when the driver's own files differ from that commit, so a file can
@@ -105,6 +129,10 @@ echo "── checking run against ${MANIFEST} ──"
 if ! docker run --rm "${MANIFEST_MOUNT[@]}" "$IMAGE" "${ARGS[@]}" --check; then
     echo "ERROR: run rejected — nothing was launched." >&2
     exit 1
+fi
+if [ "$CHECK_ONLY" = 1 ]; then
+    echo "── check only: the run is valid; nothing was launched (./run.sh to start it) ──"
+    exit 0
 fi
 
 # ── run ───────────────────────────────────────────────────────────────────────

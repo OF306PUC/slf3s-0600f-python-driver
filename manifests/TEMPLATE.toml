@@ -69,6 +69,16 @@ vary_within_condition = ["batch"]
 # two things at once).
 unique_together = [["session", "instrument"]]
 
+# ── Optional: which USB adapter reads each instrument ────────────────────────
+# Ties a field's value to the serial number of the SCC1 adapter it must be read
+# through — the serial that /dev/serial/by-id/ names. A run is rejected when this
+# host's port is another adapter, which catches a launch file copied from another
+# host. The serial identifies the CABLE: keep each instrument on its own cable.
+# Find a serial with:  ls /dev/serial/by-id/   (…_Cable_<SERIAL>-if00-port0)
+[adapters.instrument]
+I1 = "FTAAAAAA"
+I2 = "FTBBBBBB"
+
 # ── Optional: run plan ───────────────────────────────────────────────────────
 # What each (condition, replicate) must be launched with. A planned run launched
 # with any other value is rejected. An unplanned replicate of a planned

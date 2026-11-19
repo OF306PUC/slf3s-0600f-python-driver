@@ -164,7 +164,10 @@ def main():
     if args.manifest:
         try:
             spec = manifest.load(args.manifest)
-            fields = spec.resolve_run(args.configuration, args.experiment_rep, supplied)
+            # The port is checked against the manifest's [adapters], if any; a dry
+            # run reads no hardware, so it has no adapter to check.
+            fields = spec.resolve_run(args.configuration, args.experiment_rep, supplied,
+                                      port=None if args.dry_run else args.port)
         except manifest.ManifestError as exc:
             parser.error(str(exc))
         experiment_meta = {
@@ -207,6 +210,9 @@ def main():
     }
 
     if args.check:
+        if args.manifest and spec.adapters and not args.dry_run:
+            print(f"Adapter: {manifest.adapter_serial(args.port)} "
+                  f"(matches [adapters] in {spec.path.name})")
         print("Run accepted. Header would record:")
         for key, value in metadata.items():
             if key == "fields":
